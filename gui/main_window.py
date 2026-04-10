@@ -151,33 +151,42 @@ class MainWindow(QWidget):
         btn_yes.clicked.connect(on_yes)
         btn_no.clicked.connect(on_no)
 
-        dialog.exec_() if hasattr(dialog, "exec_") else dialog.exec()
+        dialog.exec() if hasattr(dialog, "exec") else dialog.exec_()
         return result
 
     def _markdown_table_to_html(self, md: str) -> str:
-        """Simple converter for markdown tables to HTML."""
+        """Simple converter for markdown tables to HTML with centered table."""
         lines = md.strip().splitlines()
         in_table = False
-        html_lines = ["<html><body style='font-family: sans-serif; font-size: 14px;'>"]
+        html_lines = [
+            "<html>"
+            "<body style='font-family: sans-serif; font-size: 14px; text-align: center;'>"
+        ]
         for line in lines:
             stripped = line.strip()
             if stripped.startswith("|") and stripped.endswith("|"):
                 if not in_table:
-                    html_lines.append("<table border='1' cellpadding='8' cellspacing='0' style='border-collapse: collapse; width: 100%;'>")
+                    html_lines.append(
+                        "<table border='1' cellpadding='8' cellspacing='0' "
+                        "style='border-collapse: collapse; margin: 0 auto;'>"
+                    )
                     in_table = True
                 cells = [c.strip() for c in stripped[1:-1].split("|")]
-                # Skip separator lines (all dashes)
+                # Skip separator lines
                 if all(c.replace("-", "") == "" for c in cells):
                     continue
                 html_lines.append("<tr>")
                 for cell in cells:
-                    html_lines.append(f"<td style='border:1px solid #ccc; padding:6px 10px;'>{cell}</td>")
+                    html_lines.append(
+                        f"<td style='border:1px solid #ccc; padding:6px 14px; text-align:left;'>"
+                        f"{cell}</td>"
+                    )
                 html_lines.append("</tr>")
             else:
                 if in_table:
                     html_lines.append("</table>")
                     in_table = False
-                html_lines.append(f"<p>{stripped}</p>")
+                html_lines.append(f"<p style='margin: 10px 0;'>{stripped}</p>")
         if in_table:
             html_lines.append("</table>")
         html_lines.append("</body></html>")
@@ -468,7 +477,7 @@ def main():
     app = QApplication(sys.argv)
     win = MainWindow()
     win.show()
-    sys.exit(app.exec_() if hasattr(app, "exec_") else app.exec())
+    sys.exit(app.exec() if hasattr(app, "exec") else app.exec_())
 
 
 if __name__ == "__main__":
