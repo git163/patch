@@ -15,14 +15,14 @@ try:
     from PySide2.QtWidgets import (
         QApplication, QWidget, QVBoxLayout, QHBoxLayout,
         QLabel, QLineEdit, QPushButton, QTextEdit,
-        QMessageBox, QFileDialog, QInputDialog
+        QMessageBox, QInputDialog
     )
     from PySide2.QtCore import Qt
 except ImportError:
     from PySide6.QtWidgets import (
         QApplication, QWidget, QVBoxLayout, QHBoxLayout,
         QLabel, QLineEdit, QPushButton, QTextEdit,
-        QMessageBox, QFileDialog, QInputDialog
+        QMessageBox, QInputDialog
     )
     from PySide6.QtCore import Qt
 
@@ -106,6 +106,45 @@ class MainWindow(QWidget):
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         self.log_edit.append(f"{timestamp}  {msg}")
 
+    def _expand_path(self, path: str) -> str:
+        if not path or is_remote(path):
+            return path
+        return os.path.expanduser(path)
+
+    def _ensure_local_dir(self, dir_path: str, name: str) -> bool:
+        """If local dir does not exist, prompt yes/no to create it."""
+        real_path = self._expand_path(dir_path)
+        if os.path.isdir(real_path):
+            return True
+        reply = QMessageBox.question(
+            self, "目录不存在",
+            f"{name} 目录不存在:\n{dir_path}\n\n是否创建?",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if reply != QMessageBox.Yes:
+            self._log(f"用户取消创建 {name} 目录")
+            return False
+        try:
+            os.makedirs(real_path, exist_ok=True)
+            self._log(f"已创建 {name} 目录: {real_path}")
+            return True
+        except Exception as e:
+            self._log(f"创建 {name} 目录失败: {e}")
+            QMessageBox.critical(self, "创建失败", str(e))
+            return False
+
+    def _check_output_exists(self, output_dir: str) -> bool:
+        """Output is a source dir; if it does not exist, show warning."""
+        real_path = self._expand_path(output_dir)
+        if os.path.isdir(real_path):
+            return True
+        QMessageBox.warning(
+            self, "路径错误",
+            f"Output 目录不存在:\n{output_dir}"
+        )
+        self._log(f"Output 目录不存在: {real_path}")
+        return False
+
     def _get_inputs(self):
         return {
             "backup": self.edit_backup.text().strip(),
@@ -133,37 +172,27 @@ class MainWindow(QWidget):
             self._log(f"默认配置文件不存在: {path}")
 
     def _on_save_params(self):
-        path, _ = QFileDialog.getSaveFileName(
-            self, "保存参数", "", "JSON Files (*.json)"
-        )
-        if not path:
-            return
-        if not path.endswith(".json"):
-            path += ".json"
+        path = DEFAULT_CONFIG_PATH
         try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(self._get_inputs(), f, ensure_ascii=False, indent=2)
             self._log(f"参数已保存: {path}")
-            QMessageBox.information(self, "保存成功", f"参数已保存到:\n{path}")
         except Exception as e:
             self._log(f"保存参数失败: {e}")
-            QMessageBox.critical(self, "保存失败", str(e))
 
     def _on_load_params(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self, "加载参数", "", "JSON Files (*.json)"
-        )
-        if not path:
+        path = DEFAULT_CONFIG_PATH
+        if not os.path.exists(path):
+            self._log(f"配置文件不存在: {path}")
             return
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
             self._set_inputs(data)
             self._log(f"参数已加载: {path}")
-            QMessageBox.information(self, "加载成功", f"参数已加载:\n{path}")
         except Exception as e:
             self._log(f"加载参数失败: {e}")
-            QMessageBox.critical(self, "加载失败", str(e))
 
     def _on_backup(self):
         data = self._get_inputs()
@@ -179,8 +208,9 @@ class MainWindow(QWidget):
         if is_remote(target_dir):
             QMessageBox.warning(self, "不支持", "备份操作仅支持本地 Target 目录")
             return
-        if not os.path.isdir(target_dir):
-            QMessageBox.warning(self, "路径错误", f"Target 目录不存在:\n{target_dir}")
+        if not self._ensure_local_dir(target_dir, "Target"):
+            return
+        if not self._ensure_local_dir(backup_dir, "Backup"):
             return
 
         reply = QMessageBox.question(
@@ -215,12 +245,14 @@ class MainWindow(QWidget):
         if not target_dir:
             QMessageBox.warning(self, "输入错误", "Target 目录不能为空")
             return
-        if not os.path.isdir(output_dir):
-            QMessageBox.warning(self, "路径错误", f"Output 目录不存在:\n{output_dir}")
+        if not self._check_output_exists(output_dir):
             return
         if is_remote(target_dir) and not password:
             QMessageBox.warning(self, "输入错误", "远程 Target 需要 SSH 密码")
             return
+        if not is_remote(target_dir):
+            if not self._ensure_local_dir(target_dir, "Target"):
+                return
 
         self._log("开始校验目录结构...")
         ok = verify_structure(output_dir, target_dir, logger=self._log)
@@ -269,6 +301,9 @@ class MainWindow(QWidget):
         if is_remote(target_dir) and not password:
             QMessageBox.warning(self, "输入错误", "远程 Target 需要 SSH 密码")
             return
+        if not is_remote(target_dir):
+            if not self._ensure_local_dir(target_dir, "Target"):
+                return
 
         backups = list_backups(backup_dir)
         if not backups:

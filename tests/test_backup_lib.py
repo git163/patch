@@ -42,6 +42,47 @@ class TestRemotePath:
             parse_remote("/local/path")
 
 
+class TestTildeExpansion:
+    def test_backup_with_tilde(self, tmp_path, monkeypatch):
+        home = str(tmp_path)
+        monkeypatch.setenv("HOME", home)
+        target = tmp_path / "target"
+        backup_dir = tmp_path / "backups"
+        target.mkdir()
+        backup_dir.mkdir()
+        (target / "file.txt").write_text("hello")
+
+        from lib.backup_lib import _expand_path
+        assert _expand_path("~/backups") == os.path.join(home, "backups")
+
+        dest = backup("~/target", "~/backups")
+        assert os.path.isdir(dest)
+        assert os.path.isfile(os.path.join(dest, "file.txt"))
+
+    def test_list_backups_with_tilde(self, tmp_path, monkeypatch):
+        home = str(tmp_path)
+        monkeypatch.setenv("HOME", home)
+        backup_dir = tmp_path / "backups"
+        backup_dir.mkdir()
+        d1 = backup_dir / "app_20240101_120000"
+        d1.mkdir()
+
+        backups = list_backups("~/backups")
+        assert len(backups) == 1
+
+    def test_patch_with_tilde(self, tmp_path, monkeypatch):
+        home = str(tmp_path)
+        monkeypatch.setenv("HOME", home)
+        output = tmp_path / "output"
+        target = tmp_path / "target"
+        output.mkdir()
+        target.mkdir()
+        (output / "f.txt").write_text("data")
+
+        patch("~/output", "~/target")
+        assert os.path.isfile(str(tmp_path / "target" / "f.txt"))
+
+
 class TestListBackups:
     def test_list_backups_empty(self, tmp_path):
         assert list_backups(str(tmp_path)) == []
