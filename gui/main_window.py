@@ -15,7 +15,7 @@ try:
     from PySide2.QtWidgets import (
         QApplication, QWidget, QVBoxLayout, QHBoxLayout,
         QLabel, QLineEdit, QPushButton, QTextEdit,
-        QMessageBox, QInputDialog, QDialog
+        QMessageBox, QInputDialog, QDialog, QFileDialog
     )
     from PySide2.QtSvg import QSvgRenderer
     from PySide2.QtGui import QPixmap, QPainter
@@ -24,7 +24,7 @@ except ImportError:
     from PySide6.QtWidgets import (
         QApplication, QWidget, QVBoxLayout, QHBoxLayout,
         QLabel, QLineEdit, QPushButton, QTextEdit,
-        QMessageBox, QInputDialog, QDialog
+        QMessageBox, QInputDialog, QDialog, QFileDialog
     )
     from PySide6.QtSvg import QSvgRenderer
     from PySide6.QtGui import QPixmap, QPainter
@@ -328,7 +328,11 @@ class MainWindow(QWidget):
             self._log(f"默认配置文件不存在: {path}")
 
     def _on_save_params(self):
-        path = DEFAULT_CONFIG_PATH
+        path, _ = QFileDialog.getSaveFileName(
+            self, "保存参数", "", "JSON Files (*.json)"
+        )
+        if not path:
+            return
         try:
             os.makedirs(os.path.dirname(path), exist_ok=True)
             with open(path, "w", encoding="utf-8") as f:
@@ -338,9 +342,10 @@ class MainWindow(QWidget):
             self._log(f"保存参数失败: {e}")
 
     def _on_load_params(self):
-        path = DEFAULT_CONFIG_PATH
-        if not os.path.exists(path):
-            self._log(f"配置文件不存在: {path}")
+        path, _ = QFileDialog.getOpenFileName(
+            self, "加载参数", "", "JSON Files (*.json)"
+        )
+        if not path:
             return
         try:
             with open(path, "r", encoding="utf-8") as f:
