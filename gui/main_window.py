@@ -26,7 +26,7 @@ except ImportError:
 
 from lib.backup_lib import (
     backup, patch, rollback, list_backups,
-    verify_structure, is_remote, check_patch_compatibility
+    is_remote, check_patch_compatibility
 )
 
 
@@ -440,15 +440,41 @@ class MainWindow(QWidget):
 
         selected_dir = os.path.join(backup_dir, name)
 
-        self._log("开始校验目录结构...")
-        structure_ok = verify_structure(selected_dir, target_dir, logger=self._log)
-        if not structure_ok:
-            reply = QMessageBox.question(
-                self, "结构不匹配",
-                "备份与 Target 目录结构不一致，是否继续回退？",
-                QMessageBox.Yes | QMessageBox.No
+        self._log("开始校验目录兼容性...")
+        compatibility, details = check_patch_compatibility(selected_dir, target_dir, logger=self._log)
+        if compatibility == "none":
+            QMessageBox.warning(
+                self, "不允许回退",
+                "备份与 Target 目录完全不一致，\n"
+                "没有任何共同的文件或目录，禁止回退以避免覆盖错误目录。"
             )
-            if reply != QMessageBox.Yes:
+            self._log("兼容性检查不通过: 完全不一致，禁止回退")
+            return
+        elif compatibility == "partial":
+            only_output = details.get("only_output", [])
+            only_target = details.get("only_target", [])
+            mismatch_info = details.get("mismatch_info", [])
+
+            lines = []
+            lines.append("备份与 Target 目录部分不一致，以下为对比情况（最多显示前 10 项）：")
+            lines.append("")
+
+            max_len = max(len(only_output), len(only_target), len(mismatch_info), 1)
+            lines.append("| 备份侧 | Target 侧 |")
+            lines.append("|---------|-----------|")
+            for i in range(min(max_len, 10)):
+                left = only_output[i] if i < len(only_output) else ""
+                right = only_target[i] if i < len(only_target) else ""
+                lines.append(f"| {left} | {right} |")
+            for m in mismatch_info[:10]:
+                lines.append(f"| {m['name']} ({m['output_type']}) | {m['name']} ({m['target_type']}) |")
+            if max_len > 10:
+                lines.append(f"| ... 还有 {max_len - 10} 项未显示 | |")
+            lines.append("")
+            lines.append("是否继续回退？")
+            md_text = "\n".join(lines)
+
+            if not self._show_markdown_dialog("结构部分不匹配", md_text):
                 self._log("用户取消回退")
                 return
 
