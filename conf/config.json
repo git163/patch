@@ -1,0 +1,6 @@
+{
+  "backup": "/path/to/backup",
+  "output": "/path/to/output",
+  "target": "/path/to/target",
+  "ssh_password": ""
+}
