@@ -17,12 +17,18 @@ try:
         QLabel, QLineEdit, QPushButton, QTextEdit,
         QMessageBox, QInputDialog, QDialog
     )
+    from PySide2.QtSvg import QSvgRenderer
+    from PySide2.QtGui import QPixmap, QPainter
+    from PySide2.QtCore import Qt
 except ImportError:
     from PySide6.QtWidgets import (
         QApplication, QWidget, QVBoxLayout, QHBoxLayout,
         QLabel, QLineEdit, QPushButton, QTextEdit,
         QMessageBox, QInputDialog, QDialog
     )
+    from PySide6.QtSvg import QSvgRenderer
+    from PySide6.QtGui import QPixmap, QPainter
+    from PySide6.QtCore import Qt
 
 from lib.backup_lib import (
     backup, patch, rollback, list_backups,
@@ -120,6 +126,35 @@ class MainWindow(QWidget):
                 f.write(line + "\n")
         except Exception:
             pass
+
+    def _svg_pixmap(self, svg_path: str, size: int = 48) -> QPixmap:
+        """Render an SVG file to a QPixmap."""
+        renderer = QSvgRenderer(svg_path)
+        pixmap = QPixmap(size, size)
+        pixmap.fill(Qt.transparent)
+        painter = QPainter(pixmap)
+        renderer.render(painter)
+        painter.end()
+        return pixmap
+
+    def _svg_icon_path(self, name: str) -> str:
+        """Return absolute path to an SVG icon."""
+        return os.path.join(os.path.dirname(__file__), "icons", f"{name}.svg")
+
+    def _custom_msg_box(self, icon_name: str, title: str, text: str,
+                        buttons=QMessageBox.Ok,
+                        default_button=QMessageBox.NoButton) -> int:
+        """Show a QMessageBox with a custom SVG icon."""
+        msg = QMessageBox(self)
+        msg.setWindowTitle(title)
+        msg.setTextFormat(Qt.RichText)
+        msg.setText(text)
+        msg.setStandardButtons(buttons)
+        msg.setDefaultButton(default_button)
+        icon_path = self._svg_icon_path(icon_name)
+        if os.path.exists(icon_path):
+            msg.setIconPixmap(self._svg_pixmap(icon_path, size=48))
+        return msg.exec_() if hasattr(msg, "exec_") else msg.exec()
 
     def _show_markdown_dialog(self, title: str, markdown_text: str) -> bool:
         """Show a dialog with markdown text and Yes/No buttons."""
@@ -233,12 +268,13 @@ class MainWindow(QWidget):
         real_path = self._expand_path(dir_path)
         if os.path.isdir(real_path):
             return True
-        reply = QMessageBox.question(
-            self, "目录不存在",
+        reply = self._custom_msg_box(
+            "question", "目录不存在",
             f"<b>{name} 目录不存在</b><br><br>"
             f"<code style='font-size:13px;'>{dir_path}</code><br><br>"
             f"是否创建?",
-            QMessageBox.Yes | QMessageBox.No
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
         )
         if reply != QMessageBox.Yes:
             self._log(f"用户取消创建 {name} 目录")
@@ -249,7 +285,7 @@ class MainWindow(QWidget):
             return True
         except Exception as e:
             self._log(f"创建 {name} 目录失败: {e}")
-            QMessageBox.critical(self, "创建失败", str(e))
+            self._custom_msg_box("question", "创建失败", str(e))
             return False
 
     def _check_output_exists(self, output_dir: str) -> bool:
@@ -257,8 +293,8 @@ class MainWindow(QWidget):
         real_path = self._expand_path(output_dir)
         if os.path.isdir(real_path):
             return True
-        QMessageBox.warning(
-            self, "路径错误",
+        self._custom_msg_box(
+            "question", "路径错误",
             f"<b>Output 目录不存在</b><br><br>"
             f"<code style='font-size:13px;'>{output_dir}</code>"
         )
@@ -320,26 +356,27 @@ class MainWindow(QWidget):
         target_dir = data["target"]
 
         if not backup_dir:
-            QMessageBox.warning(self, "输入错误", "Backup 目录不能为空")
+            self._custom_msg_box("question", "输入错误", "Backup 目录不能为空")
             return
         if not target_dir:
-            QMessageBox.warning(self, "输入错误", "Target 目录不能为空")
+            self._custom_msg_box("question", "输入错误", "Target 目录不能为空")
             return
         if is_remote(target_dir):
-            QMessageBox.warning(self, "不支持", "备份操作仅支持本地 Target 目录")
+            self._custom_msg_box("question", "不支持", "备份操作仅支持本地 Target 目录")
             return
         if not self._ensure_local_dir(target_dir, "Target"):
             return
         if not self._ensure_local_dir(backup_dir, "Backup"):
             return
 
-        reply = QMessageBox.question(
-            self, "确认备份",
+        reply = self._custom_msg_box(
+            "question", "确认备份",
             self._fmt_paths_html("即将执行备份", [
                 ("Target", target_dir),
                 ("Backup", backup_dir),
             ]) + "<br>是否继续?",
-            QMessageBox.Yes | QMessageBox.No
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
         )
         if reply != QMessageBox.Yes:
             self._log("用户取消备份")
@@ -349,14 +386,16 @@ class MainWindow(QWidget):
         try:
             dest = backup(target_dir, backup_dir, logger=self._log)
             self._log(f"备份完成: {dest}")
-            QMessageBox.information(
-                self, "备份成功",
+            self._custom_msg_box(
+                "question", "备份成功",
                 f"<b>备份完成</b><br><br>"
                 f"<code style='font-size:13px;'>{dest}</code>"
             )
         except Exception as e:
             self._log(f"备份失败: {e}")
-            QMessageBox.critical(self, "备份失败", str(e))
+            self._custom_msg_box(
+                "question", "备份失败", str(e)
+            )
 
     def _on_patch(self):
         data = self._get_inputs()
@@ -365,15 +404,15 @@ class MainWindow(QWidget):
         password = data["ssh_password"]
 
         if not output_dir:
-            QMessageBox.warning(self, "输入错误", "Output 目录不能为空")
+            self._custom_msg_box("question", "输入错误", "Output 目录不能为空")
             return
         if not target_dir:
-            QMessageBox.warning(self, "输入错误", "Target 目录不能为空")
+            self._custom_msg_box("question", "输入错误", "Target 目录不能为空")
             return
         if not self._check_output_exists(output_dir):
             return
         if is_remote(target_dir) and not password:
-            QMessageBox.warning(self, "输入错误", "远程 Target 需要 SSH 密码")
+            self._custom_msg_box("question", "输入错误", "远程 Target 需要 SSH 密码")
             return
         if not is_remote(target_dir):
             if not self._ensure_local_dir(target_dir, "Target"):
@@ -382,9 +421,9 @@ class MainWindow(QWidget):
         self._log("开始校验目录兼容性...")
         compatibility, details = check_patch_compatibility(output_dir, target_dir, logger=self._log)
         if compatibility == "none":
-            QMessageBox.warning(
-                self, "不允许打补丁",
-                "Output 与 Target 目录完全不一致，\n"
+            self._custom_msg_box(
+                "question", "不允许打补丁",
+                "Output 与 Target 目录完全不一致，<br>"
                 "没有任何共同的文件或目录，禁止打补丁以避免覆盖错误目录。"
             )
             self._log("兼容性检查不通过: 完全不一致，禁止打补丁")
@@ -417,13 +456,14 @@ class MainWindow(QWidget):
                 self._log("用户取消打补丁")
                 return
 
-        reply = QMessageBox.question(
-            self, "确认打补丁",
+        reply = self._custom_msg_box(
+            "question", "确认打补丁",
             self._fmt_paths_html("即将执行打补丁", [
                 ("Output", output_dir),
                 ("Target", target_dir),
             ]) + "<br>是否继续?",
-            QMessageBox.Yes | QMessageBox.No
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
         )
         if reply != QMessageBox.Yes:
             self._log("用户取消打补丁")
@@ -433,10 +473,10 @@ class MainWindow(QWidget):
         try:
             patch(output_dir, target_dir, password=password, logger=self._log)
             self._log("打补丁完成")
-            QMessageBox.information(self, "打补丁成功", "打补丁完成")
+            self._custom_msg_box("question", "打补丁成功", "打补丁完成")
         except Exception as e:
             self._log(f"打补丁失败: {e}")
-            QMessageBox.critical(self, "打补丁失败", str(e))
+            self._custom_msg_box("question", "打补丁失败", str(e))
 
     def _on_rollback(self):
         data = self._get_inputs()
@@ -445,13 +485,13 @@ class MainWindow(QWidget):
         password = data["ssh_password"]
 
         if not backup_dir:
-            QMessageBox.warning(self, "输入错误", "Backup 目录不能为空")
+            self._custom_msg_box("question", "输入错误", "Backup 目录不能为空")
             return
         if not target_dir:
-            QMessageBox.warning(self, "输入错误", "Target 目录不能为空")
+            self._custom_msg_box("question", "输入错误", "Target 目录不能为空")
             return
         if is_remote(target_dir) and not password:
-            QMessageBox.warning(self, "输入错误", "远程 Target 需要 SSH 密码")
+            self._custom_msg_box("question", "输入错误", "远程 Target 需要 SSH 密码")
             return
         if not is_remote(target_dir):
             if not self._ensure_local_dir(target_dir, "Target"):
@@ -459,7 +499,7 @@ class MainWindow(QWidget):
 
         backups = list_backups(backup_dir)
         if not backups:
-            QMessageBox.information(self, "无备份", "Backup 目录下没有时间戳备份")
+            self._custom_msg_box("question", "无备份", "Backup 目录下没有时间戳备份")
             return
 
         names = [os.path.basename(b) for b in backups]
@@ -475,9 +515,9 @@ class MainWindow(QWidget):
         self._log("开始校验目录兼容性...")
         compatibility, details = check_patch_compatibility(selected_dir, target_dir, logger=self._log)
         if compatibility == "none":
-            QMessageBox.warning(
-                self, "不允许回退",
-                "备份与 Target 目录完全不一致，\n"
+            self._custom_msg_box(
+                "question", "不允许回退",
+                "备份与 Target 目录完全不一致，<br>"
                 "没有任何共同的文件或目录，禁止回退以避免覆盖错误目录。"
             )
             self._log("兼容性检查不通过: 完全不一致，禁止回退")
@@ -510,13 +550,14 @@ class MainWindow(QWidget):
                 self._log("用户取消回退")
                 return
 
-        reply = QMessageBox.question(
-            self, "确认回退",
+        reply = self._custom_msg_box(
+            "question", "确认回退",
             self._fmt_paths_html("即将执行回退补丁", [
                 ("备份", selected_dir),
                 ("Target", target_dir),
             ]) + "<br>是否继续?",
-            QMessageBox.Yes | QMessageBox.No
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
         )
         if reply != QMessageBox.Yes:
             self._log("用户取消回退")
@@ -526,10 +567,10 @@ class MainWindow(QWidget):
         try:
             rollback(selected_dir, target_dir, password=password, logger=self._log)
             self._log("回退补丁完成")
-            QMessageBox.information(self, "回退成功", "回退补丁完成")
+            self._custom_msg_box("question", "回退成功", "回退补丁完成")
         except Exception as e:
             self._log(f"回退失败: {e}")
-            QMessageBox.critical(self, "回退失败", str(e))
+            self._custom_msg_box("question", "回退失败", str(e))
 
 
 def main():
