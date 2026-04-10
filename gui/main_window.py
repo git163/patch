@@ -153,7 +153,7 @@ class MainWindow(QWidget):
         msg.setDefaultButton(default_button)
         icon_path = self._svg_icon_path(icon_name)
         if os.path.exists(icon_path):
-            msg.setIconPixmap(self._svg_pixmap(icon_path, size=48))
+            msg.setIconPixmap(self._svg_pixmap(icon_path, size=96))
         return msg.exec() if hasattr(msg, "exec") else msg.exec()
 
     def _show_markdown_dialog(self, title: str, markdown_text: str) -> bool:
