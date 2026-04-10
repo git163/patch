@@ -1,6 +1,6 @@
 {
-  "backup": "/path/to/backup",
-  "output": "/path/to/output",
-  "target": "/path/to/target",
+  "backup": "~/backup_tool/backup",
+  "output": "~/backup_tool/output",
+  "target": "~/backup_tool/target",
   "ssh_password": ""
 }

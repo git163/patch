@@ -9,6 +9,13 @@ import subprocess
 from datetime import datetime
 
 
+def _expand_path(path: str) -> str:
+    """Expand ~ to home directory for local paths."""
+    if is_remote(path):
+        return path
+    return os.path.expanduser(path)
+
+
 def is_remote(path: str) -> bool:
     """Check if path is a remote path like root@192.168.1.100:/path"""
     if not path:
@@ -27,6 +34,7 @@ def parse_remote(path: str):
 
 def list_backups(backup_dir: str) -> list:
     """List timestamped backup directories under backup_dir."""
+    backup_dir = _expand_path(backup_dir)
     if not os.path.isdir(backup_dir):
         return []
     dirs = []
@@ -44,6 +52,7 @@ def verify_structure(source_dir: str, target_dir: str, logger=None) -> bool:
     For local comparison use diff -rq.
     For remote, only basic checks on source side.
     """
+    source_dir = _expand_path(source_dir)
     if not os.path.isdir(source_dir):
         if logger:
             logger(f"源目录不存在: {source_dir}")
@@ -55,6 +64,7 @@ def verify_structure(source_dir: str, target_dir: str, logger=None) -> bool:
             logger(f"远程目标跳过本地结构校验: {target_dir}")
         return True
 
+    target_dir = _expand_path(target_dir)
     if not os.path.isdir(target_dir):
         if logger:
             logger(f"目标目录不存在，将创建: {target_dir}")
@@ -177,6 +187,8 @@ def _copy_dir_remote(source_dir: str, remote_path: str, password: str, logger=No
 
 def backup(target_dir: str, backup_dir: str, logger=None) -> str:
     """Backup target_dir into backup_dir/target_basename_YYYYMMDD_HHMMSS/."""
+    target_dir = _expand_path(target_dir)
+    backup_dir = _expand_path(backup_dir)
     if not os.path.isdir(target_dir):
         raise ValueError(f"Target directory does not exist: {target_dir}")
 
@@ -204,12 +216,14 @@ def backup(target_dir: str, backup_dir: str, logger=None) -> str:
 
 def patch(output_dir: str, target_dir: str, password: str = "", logger=None) -> bool:
     """Patch: copy output_dir into target_dir."""
+    output_dir = _expand_path(output_dir)
     if not os.path.isdir(output_dir):
         raise ValueError(f"Output directory does not exist: {output_dir}")
 
     if is_remote(target_dir):
         return _copy_dir_remote(output_dir, target_dir, password, logger)
     else:
+        target_dir = _expand_path(target_dir)
         os.makedirs(target_dir, exist_ok=True)
         # For local copy, try cp -r first for logging visibility
         # cp -r output_dir/* target_dir/  doesn't work well with hidden files
@@ -227,12 +241,14 @@ def patch(output_dir: str, target_dir: str, password: str = "", logger=None) -> 
 
 def rollback(backup_timestamp_dir: str, target_dir: str, password: str = "", logger=None) -> bool:
     """Rollback: copy backup_timestamp_dir into target_dir."""
+    backup_timestamp_dir = _expand_path(backup_timestamp_dir)
     if not os.path.isdir(backup_timestamp_dir):
         raise ValueError(f"Backup directory does not exist: {backup_timestamp_dir}")
 
     if is_remote(target_dir):
         return _copy_dir_remote(backup_timestamp_dir, target_dir, password, logger)
     else:
+        target_dir = _expand_path(target_dir)
         os.makedirs(target_dir, exist_ok=True)
         if logger:
             logger(f"执行命令: cp -r {backup_timestamp_dir}/. {target_dir}")
