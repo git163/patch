@@ -3,6 +3,7 @@
 
 import os
 import sys
+import time
 import pytest
 import tempfile
 import shutil
@@ -17,6 +18,7 @@ from lib.backup_lib import (
     patch,
     rollback,
     verify_structure,
+    check_patch_compatibility,
 )
 
 
@@ -32,6 +34,7 @@ class TestRemotePath:
         assert is_remote("") is False
         assert is_remote("not_remote") is False
         assert is_remote("user@host") is False  # missing colon path
+        assert is_remote("@host:/path") is False  # missing user
 
     def test_parse_remote(self):
         assert parse_remote("root@192.168.1.1:/path") == ("root@192.168.1.1", "/path")
@@ -40,6 +43,8 @@ class TestRemotePath:
     def test_parse_remote_invalid(self):
         with pytest.raises(ValueError):
             parse_remote("/local/path")
+        with pytest.raises(ValueError):
+            parse_remote("root@192.168.1.1")
 
 
 class TestTildeExpansion:
@@ -88,7 +93,6 @@ class TestListBackups:
         assert list_backups(str(tmp_path)) == []
 
     def test_list_backups_with_dirs(self, tmp_path):
-        # Create valid backup dirs
         d1 = tmp_path / "target_20240101_120000"
         d2 = tmp_path / "target_20240102_120000"
         d3 = tmp_path / "not_a_backup"
@@ -98,9 +102,12 @@ class TestListBackups:
 
         backups = list_backups(str(tmp_path))
         assert len(backups) == 2
-        # Sorted reverse, newest first
         assert os.path.basename(backups[0]) == "target_20240102_120000"
         assert os.path.basename(backups[1]) == "target_20240101_120000"
+
+    def test_list_backups_ignores_files(self, tmp_path):
+        (tmp_path / "target_20240101_120000").write_text("not a dir")
+        assert list_backups(str(tmp_path)) == []
 
 
 class TestBackup:
@@ -116,6 +123,26 @@ class TestBackup:
         assert os.path.isdir(dest)
         assert os.path.isfile(os.path.join(dest, "file.txt"))
         assert dest.startswith(str(backup_dir))
+
+    def test_backup_multiple_times(self, tmp_path):
+        target = tmp_path / "target"
+        backup_dir = tmp_path / "backups"
+        target.mkdir()
+        (target / "f.txt").write_text("v1")
+
+        dest1 = backup(str(target), str(backup_dir))
+        (target / "f.txt").write_text("v2")
+        time.sleep(1)
+        dest2 = backup(str(target), str(backup_dir))
+
+        assert dest1 != dest2
+        assert os.path.basename(dest1) != os.path.basename(dest2)
+        backups = list_backups(str(backup_dir))
+        assert len(backups) == 2
+
+    def test_backup_missing_target(self, tmp_path):
+        with pytest.raises(ValueError):
+            backup(str(tmp_path / "missing"), str(tmp_path / "backups"))
 
 
 class TestPatch:
@@ -145,6 +172,29 @@ class TestPatch:
         patch(str(output), str(target))
         assert (target / "file.txt").read_text() == "new"
 
+    def test_patch_merges_subdirectories(self, tmp_path):
+        output = tmp_path / "output"
+        target = tmp_path / "target"
+        output.mkdir()
+        target.mkdir()
+
+        (output / "a").mkdir()
+        (output / "a" / "f1.txt").write_text("1")
+
+        (target / "a").mkdir()
+        (target / "a" / "f2.txt").write_text("2")
+        (target / "b").mkdir()
+        (target / "b" / "f3.txt").write_text("3")
+
+        patch(str(output), str(target))
+        assert (target / "a" / "f1.txt").read_text() == "1"
+        assert (target / "a" / "f2.txt").read_text() == "2"
+        assert (target / "b" / "f3.txt").read_text() == "3"
+
+    def test_patch_missing_output(self, tmp_path):
+        with pytest.raises(ValueError):
+            patch(str(tmp_path / "missing"), str(tmp_path / "target"))
+
 
 class TestRollback:
     def test_rollback_local(self, tmp_path):
@@ -161,6 +211,10 @@ class TestRollback:
         assert os.path.isfile(str(target / "backup_file.txt"))
         assert os.path.isfile(str(target / "current_file.txt"))
         assert (target / "backup_file.txt").read_text() == "backup data"
+
+    def test_rollback_missing_backup(self, tmp_path):
+        with pytest.raises(ValueError):
+            rollback(str(tmp_path / "missing"), str(tmp_path / "target"))
 
 
 class TestVerifyStructure:
@@ -182,7 +236,7 @@ class TestVerifyStructure:
         assert verify_structure(str(a), str(b)) is True
 
     def test_source_missing(self, tmp_path):
-        a = tmp_path / "a"  # doesn't exist
+        a = tmp_path / "a"
         b = tmp_path / "b"
         b.mkdir()
 
@@ -192,6 +246,138 @@ class TestVerifyStructure:
         a = tmp_path / "a"
         a.mkdir()
         assert verify_structure(str(a), "root@1.2.3.4:/path") is True
+
+    def test_hidden_files_ignored(self, tmp_path):
+        a = tmp_path / "a"
+        b = tmp_path / "b"
+        a.mkdir()
+        b.mkdir()
+        (a / ".hidden").write_text("h")
+        (b / "file.txt").write_text("b")
+
+        # Hidden files are ignored, so no overlap -> False
+        assert verify_structure(str(a), str(b)) is False
+
+
+class TestCheckPatchCompatibility:
+    def test_match(self, tmp_path):
+        output = tmp_path / "output"
+        target = tmp_path / "target"
+        output.mkdir()
+        target.mkdir()
+        (output / "f.txt").write_text("1")
+        (target / "f.txt").write_text("2")
+
+        result, details = check_patch_compatibility(str(output), str(target))
+        assert result == "match"
+        assert details["only_output"] == []
+        assert details["mismatch"] == []
+
+    def test_partial(self, tmp_path):
+        output = tmp_path / "output"
+        target = tmp_path / "target"
+        output.mkdir()
+        target.mkdir()
+        (output / "common.txt").write_text("1")
+        (output / "only_out.txt").write_text("2")
+        (target / "common.txt").write_text("3")
+        (target / "only_tgt.txt").write_text("4")
+
+        result, details = check_patch_compatibility(str(output), str(target))
+        assert result == "partial"
+        assert "only_out.txt" in details["only_output"]
+        assert "only_tgt.txt" in details["only_target"]
+
+    def test_none(self, tmp_path):
+        output = tmp_path / "output"
+        target = tmp_path / "target"
+        output.mkdir()
+        target.mkdir()
+        (output / "a.txt").write_text("1")
+        (target / "b.txt").write_text("2")
+
+        result, details = check_patch_compatibility(str(output), str(target))
+        assert result == "none"
+        assert details["only_output"] == ["a.txt"]
+        assert details["only_target"] == ["b.txt"]
+
+    def test_empty_target(self, tmp_path):
+        output = tmp_path / "output"
+        target = tmp_path / "target"
+        output.mkdir()
+        (output / "a.txt").write_text("1")
+
+        result, _ = check_patch_compatibility(str(output), str(target))
+        assert result == "empty_target"
+
+    def test_remote(self, tmp_path):
+        output = tmp_path / "output"
+        output.mkdir()
+        result, _ = check_patch_compatibility(str(output), "root@1.2.3.4:/path")
+        assert result == "remote"
+
+    def test_mismatch_type(self, tmp_path):
+        output = tmp_path / "output"
+        target = tmp_path / "target"
+        output.mkdir()
+        target.mkdir()
+        (output / "item").write_text("file")
+        (target / "item").mkdir()
+
+        result, details = check_patch_compatibility(str(output), str(target))
+        assert result == "partial"
+        assert len(details["mismatch_info"]) == 1
+        assert details["mismatch_info"][0]["name"] == "item"
+        assert details["mismatch_info"][0]["output_type"] == "文件"
+        assert details["mismatch_info"][0]["target_type"] == "目录"
+
+
+class TestFullWorkflow:
+    def test_backup_patch_rollback_chain(self, tmp_path):
+        """Simulate full workflow: backup target, patch output, rollback."""
+        target = tmp_path / "target"
+        output = tmp_path / "output"
+        backup_dir = tmp_path / "backups"
+
+        target.mkdir()
+        output.mkdir()
+
+        # Initial target state
+        (target / "keep.txt").write_text("keep")
+        (target / "replace.txt").write_text("old")
+
+        # Step 1: backup target
+        dest = backup(str(target), str(backup_dir))
+        assert os.path.isfile(os.path.join(dest, "keep.txt"))
+
+        # Step 2: patch output (output has replace.txt and new_file.txt)
+        (output / "replace.txt").write_text("new")
+        (output / "new_file.txt").write_text("new")
+        patch(str(output), str(target))
+
+        assert (target / "replace.txt").read_text() == "new"
+        assert (target / "new_file.txt").read_text() == "new"
+        assert (target / "keep.txt").read_text() == "keep"
+
+        # Step 3: rollback to backup
+        rollback(dest, str(target))
+        assert (target / "keep.txt").read_text() == "keep"
+        assert (target / "replace.txt").read_text() == "old"
+        # rollback merges, so new_file.txt should still exist
+        assert (target / "new_file.txt").read_text() == "new"
+
+    def test_hidden_files_not_counted_in_compatibility(self, tmp_path):
+        output = tmp_path / "output"
+        target = tmp_path / "target"
+        output.mkdir()
+        target.mkdir()
+        (output / ".DS_Store").write_text("hidden")
+        (output / "real.txt").write_text("1")
+        (target / "real.txt").write_text("2")
+
+        result, details = check_patch_compatibility(str(output), str(target))
+        assert result == "match"
+        assert ".DS_Store" not in details.get("only_output", [])
 
 
 if __name__ == "__main__":
