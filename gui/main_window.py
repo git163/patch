@@ -354,6 +354,7 @@ class MainWindow(QWidget):
         data = self._get_inputs()
         backup_dir = data["backup"]
         target_dir = data["target"]
+        password = data["ssh_password"]
 
         if not backup_dir:
             self._custom_msg_box("question", "输入错误", "Backup 目录不能为空")
@@ -361,11 +362,12 @@ class MainWindow(QWidget):
         if not target_dir:
             self._custom_msg_box("question", "输入错误", "Target 目录不能为空")
             return
-        if is_remote(target_dir):
-            self._custom_msg_box("question", "不支持", "备份操作仅支持本地 Target 目录")
+        if is_remote(target_dir) and not password:
+            self._custom_msg_box("question", "输入错误", "远程 Target 备份需要 SSH 密码")
             return
-        if not self._ensure_local_dir(target_dir, "Target"):
-            return
+        if not is_remote(target_dir):
+            if not self._ensure_local_dir(target_dir, "Target"):
+                return
         if not self._ensure_local_dir(backup_dir, "Backup"):
             return
 
@@ -384,7 +386,7 @@ class MainWindow(QWidget):
 
         self._log("开始备份...")
         try:
-            dest = backup(target_dir, backup_dir, logger=self._log)
+            dest = backup(target_dir, backup_dir, password=password, logger=self._log)
             self._log(f"备份完成: {dest}")
             self._custom_msg_box(
                 "question", "备份成功",

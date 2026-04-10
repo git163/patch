@@ -270,10 +270,42 @@ def _copy_dir_remote(source_dir: str, remote_path: str, password: str, logger=No
     return True
 
 
-def backup(target_dir: str, backup_dir: str, logger=None) -> str:
+def _backup_from_remote(remote_path: str, backup_dir: str, password: str, logger=None) -> str:
+    """Backup remote directory to local via scp using sshpass."""
+    user_host, remote_dir = parse_remote(remote_path)
+    basename = os.path.basename(os.path.normpath(remote_dir)) or "remote_backup"
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    dest_name = f"{basename}_{timestamp}"
+    dest_path = os.path.join(backup_dir, dest_name)
+
+    os.makedirs(backup_dir, exist_ok=True)
+
+    cmd = [
+        "sshpass", "-p", password,
+        "scp", "-r", "-o", "StrictHostKeyChecking=no",
+        "-o", "UserKnownHostsFile=/dev/null",
+        f"{user_host}:{remote_dir}", dest_path,
+    ]
+    if logger:
+        logger(f"执行命令: sshpass -p *** scp -r ... {user_host}:{remote_dir} {dest_path}")
+    ret = _run_cmd(cmd, logger)
+    if ret != 0:
+        raise RuntimeError(f"远程备份失败: {user_host}:{remote_dir} -> {dest_path}")
+    if logger:
+        logger(f"远程备份完成: {user_host}:{remote_dir} -> {dest_path}")
+    return dest_path
+
+
+def backup(target_dir: str, backup_dir: str, password: str = "", logger=None) -> str:
     """Backup target_dir into backup_dir/target_basename_YYYYMMDD_HHMMSS/."""
-    target_dir = _expand_path(target_dir)
     backup_dir = _expand_path(backup_dir)
+
+    if is_remote(target_dir):
+        if not password:
+            raise ValueError("远程 Target 备份需要 SSH 密码")
+        return _backup_from_remote(target_dir, backup_dir, password, logger)
+
+    target_dir = _expand_path(target_dir)
     if not os.path.isdir(target_dir):
         raise ValueError(f"Target directory does not exist: {target_dir}")
 

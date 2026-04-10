@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m pytest tests/test_backup_lib.py -v -k \"TestRemoteMock\")",
+      "Bash(python -m pytest tests/test_remote_scenarios.py -v)"
+    ]
+  }
+}
