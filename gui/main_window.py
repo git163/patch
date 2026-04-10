@@ -108,7 +108,18 @@ class MainWindow(QWidget):
     def _log(self, msg: str):
         from datetime import datetime
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        self.log_edit.append(f"{timestamp}  {msg}")
+        line = f"{timestamp}  {msg}"
+        self.log_edit.append(line)
+
+        # Append to log file under logs/
+        log_dir = os.path.join(os.path.dirname(__file__), "..", "logs")
+        os.makedirs(log_dir, exist_ok=True)
+        log_file = os.path.join(log_dir, datetime.now().strftime("%Y-%m-%d") + ".log")
+        try:
+            with open(log_file, "a", encoding="utf-8") as f:
+                f.write(line + "\n")
+        except Exception:
+            pass
 
     def _show_markdown_dialog(self, title: str, markdown_text: str) -> bool:
         """Show a dialog with markdown text and Yes/No buttons."""
