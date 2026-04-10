@@ -154,7 +154,7 @@ class MainWindow(QWidget):
         icon_path = self._svg_icon_path(icon_name)
         if os.path.exists(icon_path):
             msg.setIconPixmap(self._svg_pixmap(icon_path, size=48))
-        return msg.exec_() if hasattr(msg, "exec_") else msg.exec()
+        return msg.exec() if hasattr(msg, "exec") else msg.exec()
 
     def _show_markdown_dialog(self, title: str, markdown_text: str) -> bool:
         """Show a dialog with markdown text and Yes/No buttons."""
@@ -197,7 +197,7 @@ class MainWindow(QWidget):
         btn_yes.clicked.connect(on_yes)
         btn_no.clicked.connect(on_no)
 
-        dialog.exec() if hasattr(dialog, "exec") else dialog.exec_()
+        dialog.exec() if hasattr(dialog, "exec") else dialog.exec()
         return result
 
     def _markdown_table_to_html(self, md: str) -> str:
@@ -577,7 +577,7 @@ def main():
     app = QApplication(sys.argv)
     win = MainWindow()
     win.show()
-    sys.exit(app.exec() if hasattr(app, "exec") else app.exec_())
+    sys.exit(app.exec() if hasattr(app, "exec") else app.exec())
 
 
 if __name__ == "__main__":
