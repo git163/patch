@@ -54,15 +54,18 @@ class MainWindow(QWidget):
         layout.setSpacing(12)
         layout.setContentsMargins(20, 20, 20, 20)
 
-        # Save / Load buttons
+        # Save / Load / Exit buttons
         btn_layout = QHBoxLayout()
         self.btn_save = QPushButton("保存参数")
         self.btn_load = QPushButton("加载参数")
+        self.btn_exit = QPushButton("退 出")
         self.btn_save.clicked.connect(self._on_save_params)
         self.btn_load.clicked.connect(self._on_load_params)
+        self.btn_exit.clicked.connect(self._on_exit)
         btn_layout.addWidget(self.btn_save)
         btn_layout.addWidget(self.btn_load)
         btn_layout.addStretch()
+        btn_layout.addWidget(self.btn_exit)
         layout.addLayout(btn_layout)
 
         # Input fields
@@ -326,6 +329,10 @@ class MainWindow(QWidget):
                 self._log(f"加载配置失败: {e}")
         else:
             self._log(f"默认配置文件不存在: {path}")
+
+    def _on_exit(self):
+        self._log("退出程序")
+        QApplication.instance().quit()
 
     def _on_save_params(self):
         path, _ = QFileDialog.getSaveFileName(
