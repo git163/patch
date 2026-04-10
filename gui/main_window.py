@@ -28,7 +28,7 @@ except ImportError:
 
 from lib.backup_lib import (
     backup, patch, rollback, list_backups,
-    verify_structure, is_remote
+    verify_structure, is_remote, check_patch_compatibility
 )
 
 
@@ -268,12 +268,21 @@ class MainWindow(QWidget):
             if not self._ensure_local_dir(target_dir, "Target"):
                 return
 
-        self._log("开始校验目录结构...")
-        ok = verify_structure(output_dir, target_dir, logger=self._log)
-        if not ok:
+        self._log("开始校验目录兼容性...")
+        compatibility = check_patch_compatibility(output_dir, target_dir, logger=self._log)
+        if compatibility == "none":
+            QMessageBox.warning(
+                self, "不允许打补丁",
+                "Output 与 Target 目录完全不一致，\n"
+                "没有任何共同的文件或目录，禁止打补丁以避免覆盖错误目录。"
+            )
+            self._log("兼容性检查不通过: 完全不一致，禁止打补丁")
+            return
+        elif compatibility == "partial":
             reply = QMessageBox.question(
-                self, "结构不匹配",
-                "Output 与 Target 目录结构不一致，是否继续打补丁？",
+                self, "结构部分不匹配",
+                "Output 与 Target 目录部分不一致，\n"
+                "是否继续打补丁？",
                 QMessageBox.Yes | QMessageBox.No
             )
             if reply != QMessageBox.Yes:

@@ -46,10 +46,26 @@ def list_backups(backup_dir: str) -> list:
     return dirs
 
 
+def _list_visible(root: str) -> list:
+    """List non-hidden items under root recursively."""
+    items = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        # Filter hidden directories to prevent walking into them
+        dirnames[:] = [d for d in dirnames if not d.startswith('.')]
+        rel_dir = os.path.relpath(dirpath, root)
+        for f in filenames:
+            if f.startswith('.'):
+                continue
+            if rel_dir == '.':
+                items.append(f)
+            else:
+                items.append(os.path.join(rel_dir, f))
+    return sorted(items)
+
+
 def verify_structure(source_dir: str, target_dir: str, logger=None) -> bool:
     """
-    Verify that directory structures are compatible.
-    For local comparison use diff -rq.
+    Verify that directory structures are compatible (ignoring hidden files).
     For remote, only basic checks on source side.
     """
     source_dir = _expand_path(source_dir)
@@ -70,31 +86,69 @@ def verify_structure(source_dir: str, target_dir: str, logger=None) -> bool:
             logger(f"目标目录不存在，将创建: {target_dir}")
         return True
 
-    # Use diff -rq to compare structures (files presence only)
-    cmd = ["diff", "-rq", source_dir, target_dir]
+    source_items = _list_visible(source_dir)
+    target_items = _list_visible(target_dir)
+
     if logger:
-        logger(f"执行命令: {' '.join(cmd)}")
-    try:
-        result = subprocess.run(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-        )
-        if logger:
-            logger(result.stdout.strip())
-        # diff returns 0 if identical, 1 if differ, >1 if error
-        if result.returncode > 1:
-            if logger:
-                logger(f"结构校验出错，退出码: {result.returncode}")
-            return False
+        logger(f"源可见文件数: {len(source_items)}, 目标可见文件数: {len(target_items)}")
+
+    # Consider compatible if at least one overlapping relative path exists
+    # OR if target has no visible files (empty target is always compatible)
+    if not target_items:
         return True
-    except Exception as e:
+
+    overlap = set(source_items) & set(target_items)
+    if overlap:
+        return True
+
+    if logger:
+        logger("结构校验: 无可见文件交集")
+    return False
+
+
+def check_patch_compatibility(output_dir: str, target_dir: str, logger=None):
+    """
+    Check compatibility between output_dir and target_dir for patching.
+
+    Returns one of:
+      - "match"      : all top-level items overlap (target has all output items)
+      - "partial"    : some items overlap, some differ
+      - "none"       : no overlapping top-level items at all
+      - "empty_target": target does not exist or is empty
+      - "remote"     : target is remote (skip local check)
+    """
+    output_dir = _expand_path(output_dir)
+    if is_remote(target_dir):
         if logger:
-            logger(f"结构校验异常: {e}")
-        return False
+            logger(f"远程目标跳过兼容性检查: {target_dir}")
+        return "remote"
+
+    target_dir = _expand_path(target_dir)
+    if not os.path.isdir(target_dir):
+        if logger:
+            logger(f"目标目录不存在，将创建: {target_dir}")
+        return "empty_target"
+
+    output_items = {name for name in os.listdir(output_dir) if not name.startswith('.')}
+    target_items = {name for name in os.listdir(target_dir) if not name.startswith('.')}
+
+    if not output_items:
+        return "match"
+
+    overlap = output_items & target_items
+    only_output = output_items - target_items
+
+    if logger:
+        logger(f"Output 项: {sorted(output_items)}")
+        logger(f"Target 项: {sorted(target_items)}")
+        logger(f"交集: {sorted(overlap)}, 仅 Output 有: {sorted(only_output)}")
+
+    if not overlap:
+        return "none"
+    if only_output:
+        # Some output items are not in target -> partial mismatch
+        return "partial"
+    return "match"
 
 
 def _run_cmd(cmd: list, logger=None) -> int:
