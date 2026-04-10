@@ -216,6 +216,18 @@ class MainWindow(QWidget):
             return path
         return os.path.expanduser(path)
 
+    @staticmethod
+    def _fmt_paths_html(title: str, items: list) -> str:
+        """Format a list of label/path pairs as HTML for QMessageBox."""
+        lines = [f"<h3 style='margin:4px 0;'>{title}</h3>", "<table cellspacing='6' cellpadding='2'>"]
+        for label, path in items:
+            lines.append(
+                f"<tr><td align='right' valign='top'><b>{label}:</b></td>"
+                f"<td valign='top'><code style='font-size:13px;'>{path}</code></td></tr>"
+            )
+        lines.append("</table>")
+        return "\n".join(lines)
+
     def _ensure_local_dir(self, dir_path: str, name: str) -> bool:
         """If local dir does not exist, prompt yes/no to create it."""
         real_path = self._expand_path(dir_path)
@@ -223,7 +235,9 @@ class MainWindow(QWidget):
             return True
         reply = QMessageBox.question(
             self, "目录不存在",
-            f"{name} 目录不存在:\n{dir_path}\n\n是否创建?",
+            f"<b>{name} 目录不存在</b><br><br>"
+            f"<code style='font-size:13px;'>{dir_path}</code><br><br>"
+            f"是否创建?",
             QMessageBox.Yes | QMessageBox.No
         )
         if reply != QMessageBox.Yes:
@@ -245,7 +259,8 @@ class MainWindow(QWidget):
             return True
         QMessageBox.warning(
             self, "路径错误",
-            f"Output 目录不存在:\n{output_dir}"
+            f"<b>Output 目录不存在</b><br><br>"
+            f"<code style='font-size:13px;'>{output_dir}</code>"
         )
         self._log(f"Output 目录不存在: {real_path}")
         return False
@@ -320,9 +335,10 @@ class MainWindow(QWidget):
 
         reply = QMessageBox.question(
             self, "确认备份",
-            f"即将把 Target 备份到 Backup 目录:\n"
-            f"Target: {target_dir}\n"
-            f"Backup: {backup_dir}",
+            self._fmt_paths_html("即将执行备份", [
+                ("Target", target_dir),
+                ("Backup", backup_dir),
+            ]) + "<br>是否继续?",
             QMessageBox.Yes | QMessageBox.No
         )
         if reply != QMessageBox.Yes:
@@ -333,7 +349,11 @@ class MainWindow(QWidget):
         try:
             dest = backup(target_dir, backup_dir, logger=self._log)
             self._log(f"备份完成: {dest}")
-            QMessageBox.information(self, "备份成功", f"备份完成:\n{dest}")
+            QMessageBox.information(
+                self, "备份成功",
+                f"<b>备份完成</b><br><br>"
+                f"<code style='font-size:13px;'>{dest}</code>"
+            )
         except Exception as e:
             self._log(f"备份失败: {e}")
             QMessageBox.critical(self, "备份失败", str(e))
@@ -399,9 +419,10 @@ class MainWindow(QWidget):
 
         reply = QMessageBox.question(
             self, "确认打补丁",
-            f"即将把 Output 补丁到 Target:\n"
-            f"Output: {output_dir}\n"
-            f"Target: {target_dir}",
+            self._fmt_paths_html("即将执行打补丁", [
+                ("Output", output_dir),
+                ("Target", target_dir),
+            ]) + "<br>是否继续?",
             QMessageBox.Yes | QMessageBox.No
         )
         if reply != QMessageBox.Yes:
@@ -491,9 +512,10 @@ class MainWindow(QWidget):
 
         reply = QMessageBox.question(
             self, "确认回退",
-            f"即将把备份回退到 Target:\n"
-            f"备份: {selected_dir}\n"
-            f"Target: {target_dir}",
+            self._fmt_paths_html("即将执行回退补丁", [
+                ("备份", selected_dir),
+                ("Target", target_dir),
+            ]) + "<br>是否继续?",
             QMessageBox.Yes | QMessageBox.No
         )
         if reply != QMessageBox.Yes:
