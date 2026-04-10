@@ -275,7 +275,7 @@ def _backup_from_remote(remote_path: str, backup_dir: str, password: str, logger
     user_host, remote_dir = parse_remote(remote_path)
     basename = os.path.basename(os.path.normpath(remote_dir)) or "remote_backup"
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    dest_name = f"{basename}_{timestamp}"
+    dest_name = f"{basename}_{user_host}_{timestamp}"
     dest_path = os.path.join(backup_dir, dest_name)
 
     os.makedirs(backup_dir, exist_ok=True)
