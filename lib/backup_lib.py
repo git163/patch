@@ -147,6 +147,7 @@ def check_patch_compatibility(output_dir: str, target_dir: str, logger=None):
 
     # Check type mismatches for overlapping names
     mismatch = []
+    mismatch_info = []
     for name in sorted(overlap):
         out_path = os.path.join(output_dir, name)
         tgt_path = os.path.join(target_dir, name)
@@ -154,6 +155,11 @@ def check_patch_compatibility(output_dir: str, target_dir: str, logger=None):
         tgt_is_dir = os.path.isdir(tgt_path)
         if out_is_dir != tgt_is_dir:
             mismatch.append(name)
+            mismatch_info.append({
+                "name": name,
+                "output_type": "目录" if out_is_dir else "文件",
+                "target_type": "目录" if tgt_is_dir else "文件",
+            })
 
     if logger:
         logger(f"Output 项: {sorted(output_items)}")
@@ -166,6 +172,7 @@ def check_patch_compatibility(output_dir: str, target_dir: str, logger=None):
         "only_output": only_output[:10],
         "only_target": only_target[:10],
         "mismatch": mismatch[:10],
+        "mismatch_info": mismatch_info[:10],
     }
 
     if not overlap and not mismatch:

@@ -15,16 +15,14 @@ try:
     from PySide2.QtWidgets import (
         QApplication, QWidget, QVBoxLayout, QHBoxLayout,
         QLabel, QLineEdit, QPushButton, QTextEdit,
-        QMessageBox, QInputDialog
+        QMessageBox, QInputDialog, QDialog
     )
-    from PySide2.QtCore import Qt
 except ImportError:
     from PySide6.QtWidgets import (
         QApplication, QWidget, QVBoxLayout, QHBoxLayout,
         QLabel, QLineEdit, QPushButton, QTextEdit,
-        QMessageBox, QInputDialog
+        QMessageBox, QInputDialog, QDialog
     )
-    from PySide6.QtCore import Qt
 
 from lib.backup_lib import (
     backup, patch, rollback, list_backups,
@@ -111,6 +109,79 @@ class MainWindow(QWidget):
         from datetime import datetime
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         self.log_edit.append(f"{timestamp}  {msg}")
+
+    def _show_markdown_dialog(self, title: str, markdown_text: str) -> bool:
+        """Show a dialog with markdown text and Yes/No buttons."""
+        dialog = QDialog(self)
+        dialog.setWindowTitle(title)
+        dialog.setMinimumSize(700, 500)
+        dialog.resize(800, 550)
+
+        layout = QVBoxLayout(dialog)
+        text_edit = QTextEdit()
+        text_edit.setReadOnly(True)
+
+        if hasattr(text_edit, "setMarkdown"):
+            text_edit.setMarkdown(markdown_text)
+        else:
+            # Fallback: render markdown table as simple HTML table
+            html = self._markdown_table_to_html(markdown_text)
+            text_edit.setHtml(html)
+
+        layout.addWidget(text_edit)
+
+        btn_box = QHBoxLayout()
+        btn_yes = QPushButton("是")
+        btn_no = QPushButton("否")
+        btn_box.addStretch()
+        btn_box.addWidget(btn_no)
+        btn_box.addWidget(btn_yes)
+        layout.addLayout(btn_box)
+
+        result = False
+
+        def on_yes():
+            nonlocal result
+            result = True
+            dialog.accept()
+
+        def on_no():
+            dialog.reject()
+
+        btn_yes.clicked.connect(on_yes)
+        btn_no.clicked.connect(on_no)
+
+        dialog.exec_() if hasattr(dialog, "exec_") else dialog.exec()
+        return result
+
+    def _markdown_table_to_html(self, md: str) -> str:
+        """Simple converter for markdown tables to HTML."""
+        lines = md.strip().splitlines()
+        in_table = False
+        html_lines = ["<html><body style='font-family: sans-serif; font-size: 14px;'>"]
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith("|") and stripped.endswith("|"):
+                if not in_table:
+                    html_lines.append("<table border='1' cellpadding='8' cellspacing='0' style='border-collapse: collapse; width: 100%;'>")
+                    in_table = True
+                cells = [c.strip() for c in stripped[1:-1].split("|")]
+                # Skip separator lines (all dashes)
+                if all(c.replace("-", "") == "" for c in cells):
+                    continue
+                html_lines.append("<tr>")
+                for cell in cells:
+                    html_lines.append(f"<td style='border:1px solid #ccc; padding:6px 10px;'>{cell}</td>")
+                html_lines.append("</tr>")
+            else:
+                if in_table:
+                    html_lines.append("</table>")
+                    in_table = False
+                html_lines.append(f"<p>{stripped}</p>")
+        if in_table:
+            html_lines.append("</table>")
+        html_lines.append("</body></html>")
+        return "\n".join(html_lines)
 
     def _on_toggle_password(self):
         if self.edit_password.echoMode() == QLineEdit.Password:
@@ -279,27 +350,30 @@ class MainWindow(QWidget):
             self._log("兼容性检查不通过: 完全不一致，禁止打补丁")
             return
         elif compatibility == "partial":
-            msg_lines = ["Output 与 Target 目录部分不一致，以下为对比情况（最多显示前 10 项）：\n"]
             only_output = details.get("only_output", [])
             only_target = details.get("only_target", [])
-            mismatch = details.get("mismatch", [])
+            mismatch_info = details.get("mismatch_info", [])
 
-            max_len = max(len(only_output), len(only_target), len(mismatch), 1)
-            msg_lines.append(f"{'仅 Output 有':<20} {'仅 Target 有':<20} {'类型不一致':<20}")
-            msg_lines.append("-" * 60)
-            for i in range(max_len):
+            lines = []
+            lines.append("Output 与 Target 目录部分不一致，以下为对比情况（最多显示前 10 项）：")
+            lines.append("")
+
+            max_len = max(len(only_output), len(only_target), len(mismatch_info), 1)
+            lines.append("| Output 侧 | Target 侧 |")
+            lines.append("|-----------|-----------|")
+            for i in range(min(max_len, 10)):
                 left = only_output[i] if i < len(only_output) else ""
-                mid = only_target[i] if i < len(only_target) else ""
-                right = mismatch[i] if i < len(mismatch) else ""
-                msg_lines.append(f"{left:<20} {mid:<20} {right:<20}")
-            msg_lines.append("\n是否继续打补丁？")
+                right = only_target[i] if i < len(only_target) else ""
+                lines.append(f"| {left} | {right} |")
+            for m in mismatch_info[:10]:
+                lines.append(f"| {m['name']} ({m['output_type']}) | {m['name']} ({m['target_type']}) |")
+            if max_len > 10:
+                lines.append(f"| ... 还有 {max_len - 10} 项未显示 | |")
+            lines.append("")
+            lines.append("是否继续打补丁？")
+            md_text = "\n".join(lines)
 
-            reply = QMessageBox.question(
-                self, "结构部分不匹配",
-                "\n".join(msg_lines),
-                QMessageBox.Yes | QMessageBox.No
-            )
-            if reply != QMessageBox.Yes:
+            if not self._show_markdown_dialog("结构部分不匹配", md_text):
                 self._log("用户取消打补丁")
                 return
 
