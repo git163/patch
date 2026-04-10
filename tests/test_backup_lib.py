@@ -332,6 +332,187 @@ class TestCheckPatchCompatibility:
         assert details["mismatch_info"][0]["target_type"] == "目录"
 
 
+class TestRemoteMock:
+    def test_copy_dir_remote_commands(self, tmp_path, monkeypatch):
+        """Mock subprocess to verify remote commands are correct."""
+        import subprocess
+        from lib import backup_lib
+
+        source = tmp_path / "source"
+        source.mkdir()
+        (source / "file.txt").write_text("data")
+        (source / "subdir").mkdir()
+
+        calls = []
+
+        def fake_popen(cmd, **kwargs):
+            calls.append(cmd)
+            class FakeProc:
+                stdout = iter([])
+                returncode = 0
+                def wait(self):
+                    return 0
+            return FakeProc()
+
+        monkeypatch.setattr(subprocess, "Popen", fake_popen)
+
+        result = backup_lib._copy_dir_remote(
+            str(source), "root@192.168.1.1:/remote/path", "secret123"
+        )
+        assert result is True
+
+        # First command should be ssh mkdir
+        assert calls[0][0] == "sshpass"
+        assert calls[0][2] == "secret123"
+        assert calls[0][3] == "ssh"
+        assert calls[0][-2] == "root@192.168.1.1"
+        assert calls[0][-1] == "mkdir -p /remote/path"
+
+        # Remaining commands should be scp for each item
+        scp_cmds = calls[1:]
+        assert len(scp_cmds) == 2  # file.txt and subdir
+        for cmd in scp_cmds:
+            assert cmd[0] == "sshpass"
+            assert cmd[2] == "secret123"
+            assert cmd[3] == "scp"
+            assert cmd[4] == "-r"
+            assert cmd[-1] == "root@192.168.1.1:/remote/path/"
+
+    def test_copy_dir_remote_failure(self, tmp_path, monkeypatch):
+        """Mock subprocess failure to verify return False."""
+        import subprocess
+        from lib import backup_lib
+
+        source = tmp_path / "source"
+        source.mkdir()
+        (source / "file.txt").write_text("data")
+
+        class FakeProc:
+            stdout = iter([])
+            def wait(self):
+                return 1  # failure
+
+        monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: FakeProc())
+
+        result = backup_lib._copy_dir_remote(
+            str(source), "root@192.168.1.1:/remote/path", "secret123"
+        )
+        assert result is False
+
+    def test_copy_dir_remote_empty_source(self, tmp_path, monkeypatch):
+        """Remote copy with empty source should succeed (nothing to copy)."""
+        import subprocess
+        from lib import backup_lib
+
+        source = tmp_path / "source"
+        source.mkdir()
+
+        calls = []
+
+        def fake_popen(cmd, **kwargs):
+            calls.append(cmd)
+            class FakeProc:
+                stdout = iter([])
+                returncode = 0
+                def wait(self):
+                    return 0
+            return FakeProc()
+
+        monkeypatch.setattr(subprocess, "Popen", fake_popen)
+
+        result = backup_lib._copy_dir_remote(
+            str(source), "user@10.0.0.2:/opt/app", "pw"
+        )
+        assert result is True
+        assert len(calls) == 1  # only mkdir, no scp
+        assert calls[0][-1] == "mkdir -p /opt/app"
+
+    def test_copy_dir_remote_with_logging(self, tmp_path, monkeypatch):
+        """Verify logger receives expected messages."""
+        import subprocess
+        from lib import backup_lib
+
+        source = tmp_path / "source"
+        source.mkdir()
+        (source / "a.txt").write_text("a")
+
+        class FakeProc:
+            stdout = iter([])
+            returncode = 0
+            def wait(self):
+                return 0
+
+        monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: FakeProc())
+
+        logs = []
+        result = backup_lib._copy_dir_remote(
+            str(source), "deploy@host:/var/www", "mypw", logger=logs.append
+        )
+        assert result is True
+        assert any("远程复制完成" in line for line in logs)
+        assert any("sshpass" in line for line in logs)
+
+    def test_copy_dir_remote_with_nested_files(self, tmp_path, monkeypatch):
+        """Source with nested directories should trigger multiple scp calls at top level."""
+        import subprocess
+        from lib import backup_lib
+
+        source = tmp_path / "source"
+        source.mkdir()
+        (source / "dir1").mkdir()
+        (source / "dir2").mkdir()
+        (source / "top.txt").write_text("top")
+        (source / "dir1" / "inner.txt").write_text("inner")
+
+        calls = []
+
+        def fake_popen(cmd, **kwargs):
+            calls.append(cmd)
+            class FakeProc:
+                stdout = iter([])
+                returncode = 0
+                def wait(self):
+                    return 0
+            return FakeProc()
+
+        monkeypatch.setattr(subprocess, "Popen", fake_popen)
+
+        result = backup_lib._copy_dir_remote(
+            str(source), "user@host:/dst", "pw"
+        )
+        assert result is True
+        top_items = [os.path.basename(cmd[-2]) for cmd in calls[1:]]
+        assert sorted(top_items) == ["dir1", "dir2", "top.txt"]
+
+    def test_copy_dir_remote_mkdir_failure_then_copy(self, tmp_path, monkeypatch):
+        """mkdir may fail but copy should still be attempted per current logic."""
+        import subprocess
+        from lib import backup_lib
+
+        source = tmp_path / "source"
+        source.mkdir()
+        (source / "f.txt").write_text("data")
+
+        call_count = [0]
+
+        def fake_popen(cmd, **kwargs):
+            class FakeProc:
+                stdout = iter([])
+                returncode = 0 if call_count[0] > 0 else 1  # first fails, rest ok
+                def wait(self):
+                    return 0 if call_count[0] > 0 else 1
+            call_count[0] += 1
+            return FakeProc()
+
+        monkeypatch.setattr(subprocess, "Popen", fake_popen)
+
+        result = backup_lib._copy_dir_remote(
+            str(source), "user@host:/dst", "pw"
+        )
+        assert result is True
+        assert call_count[0] == 2  # mkdir + scp
+
+
 class TestFullWorkflow:
     def test_backup_patch_rollback_chain(self, tmp_path):
         """Simulate full workflow: backup target, patch output, rollback."""
