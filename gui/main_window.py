@@ -269,7 +269,7 @@ class MainWindow(QWidget):
                 return
 
         self._log("开始校验目录兼容性...")
-        compatibility = check_patch_compatibility(output_dir, target_dir, logger=self._log)
+        compatibility, details = check_patch_compatibility(output_dir, target_dir, logger=self._log)
         if compatibility == "none":
             QMessageBox.warning(
                 self, "不允许打补丁",
@@ -279,10 +279,24 @@ class MainWindow(QWidget):
             self._log("兼容性检查不通过: 完全不一致，禁止打补丁")
             return
         elif compatibility == "partial":
+            msg_lines = ["Output 与 Target 目录部分不一致，以下为对比情况（最多显示前 10 项）：\n"]
+            only_output = details.get("only_output", [])
+            only_target = details.get("only_target", [])
+            mismatch = details.get("mismatch", [])
+
+            max_len = max(len(only_output), len(only_target), len(mismatch), 1)
+            msg_lines.append(f"{'仅 Output 有':<20} {'仅 Target 有':<20} {'类型不一致':<20}")
+            msg_lines.append("-" * 60)
+            for i in range(max_len):
+                left = only_output[i] if i < len(only_output) else ""
+                mid = only_target[i] if i < len(only_target) else ""
+                right = mismatch[i] if i < len(mismatch) else ""
+                msg_lines.append(f"{left:<20} {mid:<20} {right:<20}")
+            msg_lines.append("\n是否继续打补丁？")
+
             reply = QMessageBox.question(
                 self, "结构部分不匹配",
-                "Output 与 Target 目录部分不一致，\n"
-                "是否继续打补丁？",
+                "\n".join(msg_lines),
                 QMessageBox.Yes | QMessageBox.No
             )
             if reply != QMessageBox.Yes:

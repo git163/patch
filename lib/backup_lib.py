@@ -110,45 +110,69 @@ def check_patch_compatibility(output_dir: str, target_dir: str, logger=None):
     """
     Check compatibility between output_dir and target_dir for patching.
 
-    Returns one of:
-      - "match"      : all top-level items overlap (target has all output items)
-      - "partial"    : some items overlap, some differ
-      - "none"       : no overlapping top-level items at all
+    Returns (result, details_dict):
+      result:
+      - "match"       : all top-level items overlap (target has all output items)
+      - "partial"     : some items overlap, some differ
+      - "none"        : no overlapping top-level items at all
       - "empty_target": target does not exist or is empty
-      - "remote"     : target is remote (skip local check)
+      - "remote"      : target is remote (skip local check)
+
+      details_dict may contain keys:
+      - "only_output": items only in output (max 10)
+      - "only_target": items only in target (max 10)
+      - "mismatch"   : items present in both but type differs (file vs dir) (max 10)
     """
     output_dir = _expand_path(output_dir)
     if is_remote(target_dir):
         if logger:
             logger(f"远程目标跳过兼容性检查: {target_dir}")
-        return "remote"
+        return "remote", {}
 
     target_dir = _expand_path(target_dir)
     if not os.path.isdir(target_dir):
         if logger:
             logger(f"目标目录不存在，将创建: {target_dir}")
-        return "empty_target"
+        return "empty_target", {}
 
     output_items = {name for name in os.listdir(output_dir) if not name.startswith('.')}
     target_items = {name for name in os.listdir(target_dir) if not name.startswith('.')}
 
     if not output_items:
-        return "match"
+        return "match", {}
 
     overlap = output_items & target_items
-    only_output = output_items - target_items
+    only_output = sorted(output_items - target_items)
+    only_target = sorted(target_items - output_items)
+
+    # Check type mismatches for overlapping names
+    mismatch = []
+    for name in sorted(overlap):
+        out_path = os.path.join(output_dir, name)
+        tgt_path = os.path.join(target_dir, name)
+        out_is_dir = os.path.isdir(out_path)
+        tgt_is_dir = os.path.isdir(tgt_path)
+        if out_is_dir != tgt_is_dir:
+            mismatch.append(name)
 
     if logger:
         logger(f"Output 项: {sorted(output_items)}")
         logger(f"Target 项: {sorted(target_items)}")
-        logger(f"交集: {sorted(overlap)}, 仅 Output 有: {sorted(only_output)}")
+        logger(f"交集: {sorted(overlap)}, 仅 Output 有: {only_output}")
+        if mismatch:
+            logger(f"类型不一致: {mismatch}")
 
-    if not overlap:
-        return "none"
-    if only_output:
-        # Some output items are not in target -> partial mismatch
-        return "partial"
-    return "match"
+    details = {
+        "only_output": only_output[:10],
+        "only_target": only_target[:10],
+        "mismatch": mismatch[:10],
+    }
+
+    if not overlap and not mismatch:
+        return "none", details
+    if only_output or mismatch:
+        return "partial", details
+    return "match", details
 
 
 def _run_cmd(cmd: list, logger=None) -> int:
