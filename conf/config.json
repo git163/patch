@@ -2,5 +2,5 @@
   "backup": "~/backup_tool/backup2",
   "output": "~/backup_tool/output",
   "target": "~/backup_tool/target",
-  "ssh_password": ""
+  "ssh_password": "123"
 }

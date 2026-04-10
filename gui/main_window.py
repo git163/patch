@@ -65,8 +65,6 @@ class MainWindow(QWidget):
         self.edit_backup = QLineEdit()
         self.edit_output = QLineEdit()
         self.edit_target = QLineEdit()
-        self.edit_password = QLineEdit()
-        self.edit_password.setEchoMode(QLineEdit.Password)
 
         layout.addWidget(QLabel("Backup 目录:"))
         layout.addWidget(self.edit_backup)
@@ -78,7 +76,15 @@ class MainWindow(QWidget):
         layout.addWidget(self.edit_target)
 
         layout.addWidget(QLabel("SSH 密码 (仅远程时需要):"))
-        layout.addWidget(self.edit_password)
+        pwd_layout = QHBoxLayout()
+        self.edit_password = QLineEdit()
+        self.edit_password.setEchoMode(QLineEdit.Password)
+        self.btn_toggle_pwd = QPushButton("显示")
+        self.btn_toggle_pwd.setFixedWidth(50)
+        self.btn_toggle_pwd.clicked.connect(self._on_toggle_password)
+        pwd_layout.addWidget(self.edit_password)
+        pwd_layout.addWidget(self.btn_toggle_pwd)
+        layout.addLayout(pwd_layout)
 
         # Action buttons
         action_layout = QHBoxLayout()
@@ -105,6 +111,14 @@ class MainWindow(QWidget):
         from datetime import datetime
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         self.log_edit.append(f"{timestamp}  {msg}")
+
+    def _on_toggle_password(self):
+        if self.edit_password.echoMode() == QLineEdit.Password:
+            self.edit_password.setEchoMode(QLineEdit.Normal)
+            self.btn_toggle_pwd.setText("隐藏")
+        else:
+            self.edit_password.setEchoMode(QLineEdit.Password)
+            self.btn_toggle_pwd.setText("显示")
 
     def _expand_path(self, path: str) -> str:
         if not path or is_remote(path):
