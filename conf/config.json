@@ -1,6 +1,0 @@
-{
-  "backup": "~/backup_tool/backup2",
-  "output": "~/backup_tool/output",
-  "target": "tshua@117.72.93.12:/home/tshua/bak",
-  "ssh_password": "tshua@132"
-}

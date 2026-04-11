@@ -462,6 +462,12 @@ def backup_overlapping_files(output_dir: str, target_dir: str, backup_dir: str, 
             raise ValueError("Remote target backup requires SSH password")
         if logger:
             logger("Remote target: performing full backup before patch")
+        user_host, remote_dir = parse_remote(target_dir)
+        ret, _ = _run_ssh_cmd(user_host, password, f"test -d {shlex.quote(remote_dir)}")
+        if ret != 0:
+            if logger:
+                logger(f"Remote target directory does not exist, skipping backup: {target_dir}")
+            return None
         return backup(target_dir, backup_dir, password=password, logger=logger)
 
     target_dir = _expand_path(target_dir)

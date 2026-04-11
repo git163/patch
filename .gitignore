@@ -4,13 +4,13 @@ __pycache__/
 *$py.class
 *.so
 .Python
+config_test.json
 
 # Virtual environments
 venv/
 env/
 ENV/
 .venv/
-
 # IDEs
 .vscode/
 .idea/

@@ -84,6 +84,35 @@ class _ListRemoteThread(QThread):
             self.finished.emit(False, str(e), [])
 
 
+class _PreCheckThread(QThread):
+    """Background thread for compatibility check and overlap detection."""
+    log_msg = Signal(str)
+    finished = Signal(object, object, list)
+
+    def __init__(self, source_dir: str, target_dir: str, password: str, parent=None):
+        super().__init__(parent)
+        self.source_dir = source_dir
+        self.target_dir = target_dir
+        self.password = password
+
+    def run(self):
+        try:
+            def thread_log(msg: str):
+                self.log_msg.emit(msg)
+            compat, details = check_patch_compatibility(
+                self.source_dir, self.target_dir,
+                password=self.password, logger=thread_log
+            )
+            overlaps = find_overlapping_paths(
+                self.source_dir, self.target_dir,
+                password=self.password, logger=thread_log
+            )
+            self.finished.emit(compat, details, overlaps)
+        except Exception as e:
+            self.log_msg.emit(f"Pre-check failed: {e}")
+            self.finished.emit(None, {}, [])
+
+
 class _WorkerThread(QThread):
     """Generic background worker that emits log lines and a finished signal."""
     log_msg = Signal(str)
@@ -653,7 +682,21 @@ class MainWindow(QWidget):
                 return
 
         self._log("Starting compatibility check...")
-        compatibility, details = check_patch_compatibility(output_dir, target_dir, password=password, logger=self._log)
+        self._set_busy(True)
+        pre_thread = _PreCheckThread(output_dir, target_dir, password, self)
+        pre_thread.log_msg.connect(self._log)
+
+        def on_precheck_finished(compat, details, overlaps):
+            self._set_busy(False)
+            self._continue_patch(output_dir, target_dir, password, backup_dir, compat, details, overlaps)
+
+        pre_thread.finished.connect(on_precheck_finished)
+        pre_thread.start()
+
+    def _continue_patch(self, output_dir, target_dir, password, backup_dir, compatibility, details, overlapping_files):
+        if compatibility is None:
+            self._custom_msg_box("question", "Pre-check Failed", "Failed to perform compatibility check.")
+            return
         if compatibility == "none":
             self._custom_msg_box(
                 "question", "Patch Not Allowed",
@@ -690,8 +733,6 @@ class MainWindow(QWidget):
                 self._log("User cancelled patching")
                 return
 
-        # Detect overlapping files that will be overwritten
-        overlapping_files = find_overlapping_paths(output_dir, target_dir, password=password, logger=self._log)
         if overlapping_files:
             self._log(f"Detected {len(overlapping_files)} overlapping file(s)/dir(s) that will be overwritten")
 
@@ -774,7 +815,21 @@ class MainWindow(QWidget):
         selected_dir = os.path.join(backup_dir, name)
 
         self._log("Starting compatibility check...")
-        compatibility, details = check_patch_compatibility(selected_dir, target_dir, password=password, logger=self._log)
+        self._set_busy(True)
+        pre_thread = _PreCheckThread(selected_dir, target_dir, password, self)
+        pre_thread.log_msg.connect(self._log)
+
+        def on_precheck_finished(compat, details, overlaps):
+            self._set_busy(False)
+            self._continue_rollback(selected_dir, target_dir, password, compat, details, overlaps)
+
+        pre_thread.finished.connect(on_precheck_finished)
+        pre_thread.start()
+
+    def _continue_rollback(self, selected_dir, target_dir, password, compatibility, details, overlapping_files):
+        if compatibility is None:
+            self._custom_msg_box("question", "Pre-check Failed", "Failed to perform compatibility check.")
+            return
         if compatibility == "none":
             self._custom_msg_box(
                 "question", "Rollback Not Allowed",
@@ -811,8 +866,6 @@ class MainWindow(QWidget):
                 self._log("User cancelled rollback")
                 return
 
-        # Detect overlapping files that will be overwritten during rollback
-        overlapping_files = find_overlapping_paths(selected_dir, target_dir, password=password, logger=self._log)
         if overlapping_files:
             self._log(f"Detected {len(overlapping_files)} overlapping file(s)/dir(s) that will be overwritten")
 
