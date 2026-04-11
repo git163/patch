@@ -6,6 +6,7 @@ import os
 import shutil
 import re
 import subprocess
+import shlex
 from datetime import datetime
 
 
@@ -106,7 +107,7 @@ def verify_structure(source_dir: str, target_dir: str, logger=None) -> bool:
     return False
 
 
-def check_patch_compatibility(output_dir: str, target_dir: str, logger=None):
+def check_patch_compatibility(output_dir: str, target_dir: str, password: str = "", logger=None):
     """
     Check compatibility between output_dir and target_dir for patching.
 
@@ -116,7 +117,7 @@ def check_patch_compatibility(output_dir: str, target_dir: str, logger=None):
       - "partial"     : some items overlap, some differ
       - "none"        : no overlapping top-level items at all
       - "empty_target": target does not exist or is empty
-      - "remote"      : target is remote (skip local check)
+      - "remote"      : target is remote (basic check performed remotely)
 
       details_dict may contain keys:
       - "only_output": items only in output (max 10)
@@ -126,8 +127,68 @@ def check_patch_compatibility(output_dir: str, target_dir: str, logger=None):
     output_dir = _expand_path(output_dir)
     if is_remote(target_dir):
         if logger:
-            logger(f"Remote target, skipping compatibility check: {target_dir}")
-        return "remote", {}
+            logger(f"Remote target, performing basic compatibility check: {target_dir}")
+        try:
+            target_items = {
+                name for name in _list_remote_toplevel_items(target_dir, password, logger)
+                if not name.startswith('.')
+            }
+        except Exception as e:
+            if logger:
+                logger(f"Failed to list remote target items: {e}")
+            return "remote", {}
+
+        output_items = {name for name in os.listdir(output_dir) if not name.startswith('.')}
+
+        if not target_items:
+            return "empty_target", {}
+
+        if not output_items:
+            return "match", {}
+
+        overlap = output_items & target_items
+        only_output = sorted(output_items - target_items)
+        only_target = sorted(target_items - output_items)
+
+        # Check type mismatches for overlapping names
+        mismatch = []
+        mismatch_info = []
+        user_host_r, remote_dir_r = parse_remote(target_dir)
+        for name in sorted(overlap):
+            out_path = os.path.join(output_dir, name)
+            out_is_dir = os.path.isdir(out_path)
+            test_cmd = f"test -d {shlex.quote(os.path.join(remote_dir_r, name))} && echo dir || echo file"
+            ret_r, out_r = _run_ssh_cmd(user_host_r, password, test_cmd, logger)
+            tgt_is_dir = False
+            if ret_r == 0 and out_r:
+                tgt_is_dir = out_r[0].strip() == "dir"
+            if out_is_dir != tgt_is_dir:
+                mismatch.append(name)
+                mismatch_info.append({
+                    "name": name,
+                    "output_type": "directory" if out_is_dir else "file",
+                    "target_type": "directory" if tgt_is_dir else "file",
+                })
+
+        if logger:
+            logger(f"Output items: {sorted(output_items)}")
+            logger(f"Remote target items: {sorted(target_items)}")
+            logger(f"Overlap: {sorted(overlap)}, Only in output: {only_output}")
+            if mismatch:
+                logger(f"Type mismatch: {mismatch}")
+
+        details = {
+            "only_output": only_output[:10],
+            "only_target": only_target[:10],
+            "mismatch": mismatch[:10],
+            "mismatch_info": mismatch_info[:10],
+        }
+
+        if not overlap and not mismatch:
+            return "none", details
+        if only_output or mismatch:
+            return "partial", details
+        return "match", details
 
     target_dir = _expand_path(target_dir)
     if not os.path.isdir(target_dir):
@@ -208,6 +269,58 @@ def _run_cmd(cmd: list, logger=None) -> int:
         if logger:
             logger(f"Command execution failed: {e}")
         return -1
+
+
+def _run_ssh_cmd(user_host: str, password: str, remote_cmd: str, logger=None):
+    """Run a remote command via sshpass/ssh and return (returncode, stdout_lines)."""
+    cmd = [
+        "sshpass", "-p", password,
+        "ssh", "-o", "StrictHostKeyChecking=no",
+        "-o", "UserKnownHostsFile=/dev/null",
+        user_host, remote_cmd
+    ]
+    if logger:
+        logger(f"Executing ssh command on {user_host}: {remote_cmd}")
+    try:
+        proc = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        if proc.returncode != 0 and logger:
+            logger(f"SSH stderr: {proc.stderr.strip()}")
+        return proc.returncode, proc.stdout.splitlines()
+    except Exception as e:
+        if logger:
+            logger(f"SSH command execution failed: {e}")
+        return -1, []
+
+
+def _list_remote_toplevel_items(remote_path: str, password: str, logger=None) -> list:
+    """List top-level non-hidden items of a remote directory."""
+    user_host, remote_dir = parse_remote(remote_path)
+    remote_cmd = f"ls -A1 {shlex.quote(remote_dir)} 2>/dev/null || true"
+    ret, lines = _run_ssh_cmd(user_host, password, remote_cmd, logger)
+    if ret != 0:
+        return []
+    return [line.strip() for line in lines if line.strip() and not line.strip().startswith('.')]
+
+
+def _list_remote_paths(remote_path: str, password: str, logger=None) -> list:
+    """List all non-hidden relative paths under a remote directory."""
+    user_host, remote_dir = parse_remote(remote_path)
+    escaped_dir = re.escape(remote_dir)
+    remote_cmd = (
+        f"find {shlex.quote(remote_dir)} -not -path '*/\\.*' | "
+        f"sed 's|^{escaped_dir}/||; /^$/d'"
+    )
+    ret, lines = _run_ssh_cmd(user_host, password, remote_cmd, logger)
+    if ret != 0:
+        return []
+    return sorted([line.strip() for line in lines if line.strip()])
 
 
 def _copy_dir_local(source_dir: str, dest_dir: str, logger=None) -> bool:
@@ -334,11 +447,20 @@ def backup(target_dir: str, backup_dir: str, password: str = "", logger=None) ->
     return dest_path
 
 
-def find_overlapping_paths(output_dir: str, target_dir: str) -> list:
+def find_overlapping_paths(output_dir: str, target_dir: str, password: str = "", logger=None) -> list:
     """Return sorted list of relative paths that exist in both output and target."""
     output_dir = _expand_path(output_dir)
+    if not os.path.isdir(output_dir):
+        return []
+
+    if is_remote(target_dir):
+        remote_items = _list_remote_paths(target_dir, password, logger)
+        output_items = _list_visible(output_dir)
+        overlap_set = set(output_items) & set(remote_items)
+        return sorted(overlap_set)
+
     target_dir = _expand_path(target_dir)
-    if is_remote(target_dir) or not os.path.isdir(target_dir) or not os.path.isdir(output_dir):
+    if not os.path.isdir(target_dir):
         return []
 
     overlaps = []

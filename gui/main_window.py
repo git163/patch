@@ -378,12 +378,15 @@ class MainWindow(QWidget):
         if is_remote(target_dir) and not password:
             self._custom_msg_box("question", "Input Error", "Remote target requires SSH password")
             return
+        if is_remote(target_dir) and not backup_dir:
+            self._custom_msg_box("question", "Input Error", "Remote target requires Backup directory")
+            return
         if not is_remote(target_dir):
             if not self._ensure_local_dir(target_dir, "Target"):
                 return
 
         self._log("Starting compatibility check...")
-        compatibility, details = check_patch_compatibility(output_dir, target_dir, logger=self._log)
+        compatibility, details = check_patch_compatibility(output_dir, target_dir, password=password, logger=self._log)
         if compatibility == "none":
             self._custom_msg_box(
                 "question", "Patch Not Allowed",
@@ -421,11 +424,9 @@ class MainWindow(QWidget):
                 return
 
         # Detect overlapping files that will be overwritten
-        overlapping_files = []
-        if not is_remote(target_dir):
-            overlapping_files = find_overlapping_paths(output_dir, target_dir)
-            if overlapping_files:
-                self._log(f"Detected {len(overlapping_files)} overlapping file(s)/dir(s) that will be overwritten")
+        overlapping_files = find_overlapping_paths(output_dir, target_dir, password=password, logger=self._log)
+        if overlapping_files:
+            self._log(f"Detected {len(overlapping_files)} overlapping file(s)/dir(s) that will be overwritten")
 
         md_lines = []
         md_lines.append(f"**Output:** `{output_dir}`")
@@ -485,6 +486,9 @@ class MainWindow(QWidget):
         if is_remote(target_dir) and not password:
             self._custom_msg_box("question", "Input Error", "Remote target requires SSH password")
             return
+        if is_remote(target_dir) and not backup_dir:
+            self._custom_msg_box("question", "Input Error", "Remote target requires Backup directory")
+            return
         if not is_remote(target_dir):
             if not self._ensure_local_dir(target_dir, "Target"):
                 return
@@ -505,7 +509,7 @@ class MainWindow(QWidget):
         selected_dir = os.path.join(backup_dir, name)
 
         self._log("Starting compatibility check...")
-        compatibility, details = check_patch_compatibility(selected_dir, target_dir, logger=self._log)
+        compatibility, details = check_patch_compatibility(selected_dir, target_dir, password=password, logger=self._log)
         if compatibility == "none":
             self._custom_msg_box(
                 "question", "Rollback Not Allowed",
@@ -543,11 +547,9 @@ class MainWindow(QWidget):
                 return
 
         # Detect overlapping files that will be overwritten during rollback
-        overlapping_files = []
-        if not is_remote(target_dir):
-            overlapping_files = find_overlapping_paths(selected_dir, target_dir)
-            if overlapping_files:
-                self._log(f"Detected {len(overlapping_files)} overlapping file(s)/dir(s) that will be overwritten")
+        overlapping_files = find_overlapping_paths(selected_dir, target_dir, password=password, logger=self._log)
+        if overlapping_files:
+            self._log(f"Detected {len(overlapping_files)} overlapping file(s)/dir(s) that will be overwritten")
 
         md_lines = []
         md_lines.append(f"**Backup:** `{selected_dir}`")
