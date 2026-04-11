@@ -328,8 +328,8 @@ class TestCheckPatchCompatibility:
         assert result == "partial"
         assert len(details["mismatch_info"]) == 1
         assert details["mismatch_info"][0]["name"] == "item"
-        assert details["mismatch_info"][0]["output_type"] == "文件"
-        assert details["mismatch_info"][0]["target_type"] == "目录"
+        assert details["mismatch_info"][0]["output_type"] == "file"
+        assert details["mismatch_info"][0]["target_type"] == "directory"
 
 
 class TestRemoteMock:
@@ -449,7 +449,7 @@ class TestRemoteMock:
             str(source), "deploy@host:/var/www", "mypw", logger=logs.append
         )
         assert result is True
-        assert any("远程复制完成" in line for line in logs)
+        assert any("Remote copy completed" in line for line in logs)
         assert any("sshpass" in line for line in logs)
 
     def test_copy_dir_remote_with_nested_files(self, tmp_path, monkeypatch):

@@ -80,7 +80,7 @@ class TestRemoteBackupPull:
         backup_dir = tmp_path / "backups"
         backup_dir.mkdir()
 
-        with pytest.raises(ValueError, match="远程 Target 备份需要 SSH 密码"):
+        with pytest.raises(ValueError, match="Remote target backup requires SSH password"):
             backup_lib.backup(
                 "root@192.168.1.1:/remote/target", str(backup_dir)
             )
@@ -126,7 +126,7 @@ class TestRemoteBackupPull:
 
         monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: FakeProc())
 
-        with pytest.raises(RuntimeError, match="远程备份失败"):
+        with pytest.raises(RuntimeError, match="Remote backup failed"):
             backup_lib.backup(
                 "root@192.168.1.1:/remote/target", str(backup_dir), password="secret"
             )
@@ -160,7 +160,7 @@ class TestGuiRemoteBackupBlocked:
         target = "root@192.168.1.1:/remote/target"
         assert backup_lib.is_remote(target) is True
         # In main_window._on_backup there is:
-        #   if is_remote(target_dir): QMessageBox.warning(..., "备份操作仅支持本地 Target 目录")
+        #   if is_remote(target_dir): QMessageBox.warning(..., "Backup operations only support local Target directories")
         # So backup is explicitly blocked in GUI.
         pass
 

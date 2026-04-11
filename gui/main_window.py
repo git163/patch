@@ -44,7 +44,7 @@ DEFAULT_CONFIG_PATH = os.path.join(
 class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("自动备份与打补丁工具")
+        self.setWindowTitle("Auto Backup and Patch Tool")
         self.resize(700, 600)
         self._build_ui()
         self._load_config(DEFAULT_CONFIG_PATH)
@@ -56,9 +56,9 @@ class MainWindow(QWidget):
 
         # Save / Load / Exit buttons
         btn_layout = QHBoxLayout()
-        self.btn_save = QPushButton("保存参数")
-        self.btn_load = QPushButton("加载参数")
-        self.btn_exit = QPushButton("退 出")
+        self.btn_save = QPushButton("Save Params")
+        self.btn_load = QPushButton("Load Params")
+        self.btn_exit = QPushButton("Exit")
         self.btn_save.clicked.connect(self._on_save_params)
         self.btn_load.clicked.connect(self._on_load_params)
         self.btn_exit.clicked.connect(self._on_exit)
@@ -73,20 +73,20 @@ class MainWindow(QWidget):
         self.edit_output = QLineEdit()
         self.edit_target = QLineEdit()
 
-        layout.addWidget(QLabel("Backup 目录:"))
+        layout.addWidget(QLabel("Backup Dir:"))
         layout.addWidget(self.edit_backup)
 
-        layout.addWidget(QLabel("Output 目录:"))
+        layout.addWidget(QLabel("Output Dir:"))
         layout.addWidget(self.edit_output)
 
-        layout.addWidget(QLabel("Target 目录 (支持本地路径 或 用户名@ip:/path 远程路径):"))
+        layout.addWidget(QLabel("Target Dir (local path or user@ip:/path for remote):"))
         layout.addWidget(self.edit_target)
 
-        layout.addWidget(QLabel("SSH 密码 (仅远程时需要):"))
+        layout.addWidget(QLabel("SSH Password (only for remote):"))
         pwd_layout = QHBoxLayout()
         self.edit_password = QLineEdit()
         self.edit_password.setEchoMode(QLineEdit.Password)
-        self.btn_toggle_pwd = QPushButton("显示")
+        self.btn_toggle_pwd = QPushButton("Show")
         self.btn_toggle_pwd.setFixedWidth(50)
         self.btn_toggle_pwd.clicked.connect(self._on_toggle_password)
         pwd_layout.addWidget(self.edit_password)
@@ -95,9 +95,9 @@ class MainWindow(QWidget):
 
         # Action buttons
         action_layout = QHBoxLayout()
-        self.btn_backup = QPushButton("备 份")
-        self.btn_patch = QPushButton("打 补 丁")
-        self.btn_rollback = QPushButton("回 退 补 丁")
+        self.btn_backup = QPushButton("Backup")
+        self.btn_patch = QPushButton("Patch")
+        self.btn_rollback = QPushButton("Rollback")
         self.btn_backup.clicked.connect(self._on_backup)
         self.btn_patch.clicked.connect(self._on_patch)
         self.btn_rollback.clicked.connect(self._on_rollback)
@@ -107,7 +107,7 @@ class MainWindow(QWidget):
         layout.addLayout(action_layout)
 
         # Log window
-        layout.addWidget(QLabel("日志窗口:"))
+        layout.addWidget(QLabel("Log Window:"))
         self.log_edit = QTextEdit()
         self.log_edit.setReadOnly(True)
         layout.addWidget(self.log_edit, stretch=1)
@@ -180,8 +180,8 @@ class MainWindow(QWidget):
         layout.addWidget(text_edit)
 
         btn_box = QHBoxLayout()
-        btn_yes = QPushButton("是")
-        btn_no = QPushButton("否")
+        btn_yes = QPushButton("Yes")
+        btn_no = QPushButton("No")
         btn_box.addStretch()
         btn_box.addWidget(btn_no)
         btn_box.addWidget(btn_yes)
@@ -244,10 +244,10 @@ class MainWindow(QWidget):
     def _on_toggle_password(self):
         if self.edit_password.echoMode() == QLineEdit.Password:
             self.edit_password.setEchoMode(QLineEdit.Normal)
-            self.btn_toggle_pwd.setText("隐藏")
+            self.btn_toggle_pwd.setText("Hide")
         else:
             self.edit_password.setEchoMode(QLineEdit.Password)
-            self.btn_toggle_pwd.setText("显示")
+            self.btn_toggle_pwd.setText("Show")
 
     def _expand_path(self, path: str) -> str:
         if not path or is_remote(path):
@@ -272,23 +272,23 @@ class MainWindow(QWidget):
         if os.path.isdir(real_path):
             return True
         reply = self._custom_msg_box(
-            "question", "目录不存在",
-            f"<b>{name} 目录不存在</b><br><br>"
+            "question", "Directory Does Not Exist",
+            f"<b>{name} directory does not exist</b><br><br>"
             f"<code style='font-size:13px;'>{dir_path}</code><br><br>"
-            f"是否创建?",
+            f"Create?",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No
         )
         if reply != QMessageBox.Yes:
-            self._log(f"用户取消创建 {name} 目录")
+            self._log(f"User cancelled creating {name} directory")
             return False
         try:
             os.makedirs(real_path, exist_ok=True)
-            self._log(f"已创建 {name} 目录: {real_path}")
+            self._log(f"Created {name} directory: {real_path}")
             return True
         except Exception as e:
-            self._log(f"创建 {name} 目录失败: {e}")
-            self._custom_msg_box("question", "创建失败", str(e))
+            self._log(f"Failed to create {name} directory: {e}")
+            self._custom_msg_box("question", "Create Failed", str(e))
             return False
 
     def _check_output_exists(self, output_dir: str) -> bool:
@@ -297,11 +297,11 @@ class MainWindow(QWidget):
         if os.path.isdir(real_path):
             return True
         self._custom_msg_box(
-            "question", "路径错误",
-            f"<b>Output 目录不存在</b><br><br>"
+            "question", "Path Error",
+            f"<b>Output directory does not exist</b><br><br>"
             f"<code style='font-size:13px;'>{output_dir}</code>"
         )
-        self._log(f"Output 目录不存在: {real_path}")
+        self._log(f"Output directory does not exist: {real_path}")
         return False
 
     def _get_inputs(self):
@@ -324,19 +324,19 @@ class MainWindow(QWidget):
                 with open(path, "r", encoding="utf-8") as f:
                     data = json.load(f)
                 self._set_inputs(data)
-                self._log(f"已加载配置: {path}")
+                self._log(f"Config loaded: {path}")
             except Exception as e:
-                self._log(f"加载配置失败: {e}")
+                self._log(f"Failed to load config: {e}")
         else:
-            self._log(f"默认配置文件不存在: {path}")
+            self._log(f"Default config file does not exist: {path}")
 
     def _on_exit(self):
-        self._log("退出程序")
+        self._log("Exiting program")
         QApplication.instance().quit()
 
     def _on_save_params(self):
         path, _ = QFileDialog.getSaveFileName(
-            self, "保存参数", "", "JSON Files (*.json)"
+            self, "Save Params", "", "JSON Files (*.json)"
         )
         if not path:
             return
@@ -344,13 +344,13 @@ class MainWindow(QWidget):
             os.makedirs(os.path.dirname(path), exist_ok=True)
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(self._get_inputs(), f, ensure_ascii=False, indent=2)
-            self._log(f"参数已保存: {path}")
+            self._log(f"Params saved: {path}")
         except Exception as e:
-            self._log(f"保存参数失败: {e}")
+            self._log(f"Failed to save params: {e}")
 
     def _on_load_params(self):
         path, _ = QFileDialog.getOpenFileName(
-            self, "加载参数", "", "JSON Files (*.json)"
+            self, "Load Params", "", "JSON Files (*.json)"
         )
         if not path:
             return
@@ -358,9 +358,9 @@ class MainWindow(QWidget):
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
             self._set_inputs(data)
-            self._log(f"参数已加载: {path}")
+            self._log(f"Params loaded: {path}")
         except Exception as e:
-            self._log(f"加载参数失败: {e}")
+            self._log(f"Failed to load params: {e}")
 
     def _on_backup(self):
         data = self._get_inputs()
@@ -369,13 +369,13 @@ class MainWindow(QWidget):
         password = data["ssh_password"]
 
         if not backup_dir:
-            self._custom_msg_box("question", "输入错误", "Backup 目录不能为空")
+            self._custom_msg_box("question", "Input Error", "Backup directory cannot be empty")
             return
         if not target_dir:
-            self._custom_msg_box("question", "输入错误", "Target 目录不能为空")
+            self._custom_msg_box("question", "Input Error", "Target directory cannot be empty")
             return
         if is_remote(target_dir) and not password:
-            self._custom_msg_box("question", "输入错误", "远程 Target 备份需要 SSH 密码")
+            self._custom_msg_box("question", "Input Error", "Remote target backup requires SSH password")
             return
         if not is_remote(target_dir):
             if not self._ensure_local_dir(target_dir, "Target"):
@@ -384,31 +384,31 @@ class MainWindow(QWidget):
             return
 
         reply = self._custom_msg_box(
-            "question", "确认备份",
-            self._fmt_paths_html("即将执行备份", [
+            "question", "Confirm Backup",
+            self._fmt_paths_html("About to execute backup", [
                 ("Target", target_dir),
                 ("Backup", backup_dir),
-            ]) + "<br>是否继续?",
+            ]) + "<br>Continue?",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No
         )
         if reply != QMessageBox.Yes:
-            self._log("用户取消备份")
+            self._log("User cancelled backup")
             return
 
-        self._log("开始备份...")
+        self._log("Starting backup...")
         try:
             dest = backup(target_dir, backup_dir, password=password, logger=self._log)
-            self._log(f"备份完成: {dest}")
+            self._log(f"Backup completed: {dest}")
             self._custom_msg_box(
-                "question", "备份成功",
-                f"<b>备份完成</b><br><br>"
+                "question", "Backup Successful",
+                f"<b>Backup completed</b><br><br>"
                 f"<code style='font-size:13px;'>{dest}</code>"
             )
         except Exception as e:
-            self._log(f"备份失败: {e}")
+            self._log(f"Backup failed: {e}")
             self._custom_msg_box(
-                "question", "备份失败", str(e)
+                "question", "Backup Failed", str(e)
             )
 
     def _on_patch(self):
@@ -418,29 +418,29 @@ class MainWindow(QWidget):
         password = data["ssh_password"]
 
         if not output_dir:
-            self._custom_msg_box("question", "输入错误", "Output 目录不能为空")
+            self._custom_msg_box("question", "Input Error", "Output directory cannot be empty")
             return
         if not target_dir:
-            self._custom_msg_box("question", "输入错误", "Target 目录不能为空")
+            self._custom_msg_box("question", "Input Error", "Target directory cannot be empty")
             return
         if not self._check_output_exists(output_dir):
             return
         if is_remote(target_dir) and not password:
-            self._custom_msg_box("question", "输入错误", "远程 Target 需要 SSH 密码")
+            self._custom_msg_box("question", "Input Error", "Remote target requires SSH password")
             return
         if not is_remote(target_dir):
             if not self._ensure_local_dir(target_dir, "Target"):
                 return
 
-        self._log("开始校验目录兼容性...")
+        self._log("Starting compatibility check...")
         compatibility, details = check_patch_compatibility(output_dir, target_dir, logger=self._log)
         if compatibility == "none":
             self._custom_msg_box(
-                "question", "不允许打补丁",
-                "Output 与 Target 目录完全不一致，<br>"
-                "没有任何共同的文件或目录，禁止打补丁以避免覆盖错误目录。"
+                "question", "Patch Not Allowed",
+                "Output and Target directories are completely different,<br>"
+                "no common files or directories. Patching is forbidden to avoid overwriting the wrong directory."
             )
-            self._log("兼容性检查不通过: 完全不一致，禁止打补丁")
+            self._log("Compatibility check failed: completely different, patching forbidden")
             return
         elif compatibility == "partial":
             only_output = details.get("only_output", [])
@@ -448,12 +448,12 @@ class MainWindow(QWidget):
             mismatch_info = details.get("mismatch_info", [])
 
             lines = []
-            lines.append("Output 与 Target 目录部分不一致，以下为对比情况（最多显示前 10 项）：")
+            lines.append("Output and Target directories are partially different. Comparison (showing first 10 items):")
             lines.append("")
 
             max_len = max(len(only_output), len(only_target), len(mismatch_info), 1)
-            lines.append("| Output 侧 | Target 侧 |")
-            lines.append("|-----------|-----------|")
+            lines.append("| Output Side | Target Side |")
+            lines.append("|-------------|-------------|")
             for i in range(min(max_len, 10)):
                 left = only_output[i] if i < len(only_output) else ""
                 right = only_target[i] if i < len(only_target) else ""
@@ -461,36 +461,36 @@ class MainWindow(QWidget):
             for m in mismatch_info[:10]:
                 lines.append(f"| {m['name']} ({m['output_type']}) | {m['name']} ({m['target_type']}) |")
             if max_len > 10:
-                lines.append(f"| ... 还有 {max_len - 10} 项未显示 | |")
+                lines.append(f"| ... {max_len - 10} more items not shown | |")
             lines.append("")
-            lines.append("是否继续打补丁？")
+            lines.append("Continue patching?")
             md_text = "\n".join(lines)
 
-            if not self._show_markdown_dialog("结构部分不匹配", md_text):
-                self._log("用户取消打补丁")
+            if not self._show_markdown_dialog("Partial Structure Mismatch", md_text):
+                self._log("User cancelled patching")
                 return
 
         reply = self._custom_msg_box(
-            "question", "确认打补丁",
-            self._fmt_paths_html("即将执行打补丁", [
+            "question", "Confirm Patch",
+            self._fmt_paths_html("About to execute patch", [
                 ("Output", output_dir),
                 ("Target", target_dir),
-            ]) + "<br>是否继续?",
+            ]) + "<br>Continue?",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No
         )
         if reply != QMessageBox.Yes:
-            self._log("用户取消打补丁")
+            self._log("User cancelled patching")
             return
 
-        self._log("开始打补丁...")
+        self._log("Starting patch...")
         try:
             patch(output_dir, target_dir, password=password, logger=self._log)
-            self._log("打补丁完成")
-            self._custom_msg_box("question", "打补丁成功", "打补丁完成")
+            self._log("Patch completed")
+            self._custom_msg_box("question", "Patch Successful", "Patch completed")
         except Exception as e:
-            self._log(f"打补丁失败: {e}")
-            self._custom_msg_box("question", "打补丁失败", str(e))
+            self._log(f"Patch failed: {e}")
+            self._custom_msg_box("question", "Patch Failed", str(e))
 
     def _on_rollback(self):
         data = self._get_inputs()
@@ -499,13 +499,13 @@ class MainWindow(QWidget):
         password = data["ssh_password"]
 
         if not backup_dir:
-            self._custom_msg_box("question", "输入错误", "Backup 目录不能为空")
+            self._custom_msg_box("question", "Input Error", "Backup directory cannot be empty")
             return
         if not target_dir:
-            self._custom_msg_box("question", "输入错误", "Target 目录不能为空")
+            self._custom_msg_box("question", "Input Error", "Target directory cannot be empty")
             return
         if is_remote(target_dir) and not password:
-            self._custom_msg_box("question", "输入错误", "远程 Target 需要 SSH 密码")
+            self._custom_msg_box("question", "Input Error", "Remote target requires SSH password")
             return
         if not is_remote(target_dir):
             if not self._ensure_local_dir(target_dir, "Target"):
@@ -513,28 +513,28 @@ class MainWindow(QWidget):
 
         backups = list_backups(backup_dir)
         if not backups:
-            self._custom_msg_box("question", "无备份", "Backup 目录下没有时间戳备份")
+            self._custom_msg_box("question", "No Backups", "No timestamped backups in backup directory")
             return
 
         names = [os.path.basename(b) for b in backups]
         name, ok = QInputDialog.getItem(
-            self, "选择备份", "请选择要回退的备份:", names, 0, False
+            self, "Select Backup", "Please select a backup to rollback:", names, 0, False
         )
         if not ok or not name:
-            self._log("用户取消回退")
+            self._log("User cancelled rollback")
             return
 
         selected_dir = os.path.join(backup_dir, name)
 
-        self._log("开始校验目录兼容性...")
+        self._log("Starting compatibility check...")
         compatibility, details = check_patch_compatibility(selected_dir, target_dir, logger=self._log)
         if compatibility == "none":
             self._custom_msg_box(
-                "question", "不允许回退",
-                "备份与 Target 目录完全不一致，<br>"
-                "没有任何共同的文件或目录，禁止回退以避免覆盖错误目录。"
+                "question", "Rollback Not Allowed",
+                "Backup and Target directories are completely different,<br>"
+                "no common files or directories. Rollback is forbidden."
             )
-            self._log("兼容性检查不通过: 完全不一致，禁止回退")
+            self._log("Compatibility check failed: completely different, rollback forbidden")
             return
         elif compatibility == "partial":
             only_output = details.get("only_output", [])
@@ -542,12 +542,12 @@ class MainWindow(QWidget):
             mismatch_info = details.get("mismatch_info", [])
 
             lines = []
-            lines.append("备份与 Target 目录部分不一致，以下为对比情况（最多显示前 10 项）：")
+            lines.append("Backup and Target directories are partially different. Comparison (showing first 10 items):")
             lines.append("")
 
             max_len = max(len(only_output), len(only_target), len(mismatch_info), 1)
-            lines.append("| 备份侧 | Target 侧 |")
-            lines.append("|---------|-----------|")
+            lines.append("| Backup Side | Target Side |")
+            lines.append("|-------------|-------------|")
             for i in range(min(max_len, 10)):
                 left = only_output[i] if i < len(only_output) else ""
                 right = only_target[i] if i < len(only_target) else ""
@@ -555,36 +555,36 @@ class MainWindow(QWidget):
             for m in mismatch_info[:10]:
                 lines.append(f"| {m['name']} ({m['output_type']}) | {m['name']} ({m['target_type']}) |")
             if max_len > 10:
-                lines.append(f"| ... 还有 {max_len - 10} 项未显示 | |")
+                lines.append(f"| ... {max_len - 10} more items not shown | |")
             lines.append("")
-            lines.append("是否继续回退？")
+            lines.append("Continue rollback?")
             md_text = "\n".join(lines)
 
-            if not self._show_markdown_dialog("结构部分不匹配", md_text):
-                self._log("用户取消回退")
+            if not self._show_markdown_dialog("Partial Structure Mismatch", md_text):
+                self._log("User cancelled rollback")
                 return
 
         reply = self._custom_msg_box(
-            "question", "确认回退",
-            self._fmt_paths_html("即将执行回退补丁", [
-                ("备份", selected_dir),
+            "question", "Confirm Rollback",
+            self._fmt_paths_html("About to execute rollback", [
+                ("Backup", selected_dir),
                 ("Target", target_dir),
-            ]) + "<br>是否继续?",
+            ]) + "<br>Continue?",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No
         )
         if reply != QMessageBox.Yes:
-            self._log("用户取消回退")
+            self._log("User cancelled rollback")
             return
 
-        self._log("开始回退补丁...")
+        self._log("Starting rollback...")
         try:
             rollback(selected_dir, target_dir, password=password, logger=self._log)
-            self._log("回退补丁完成")
-            self._custom_msg_box("question", "回退成功", "回退补丁完成")
+            self._log("Rollback completed")
+            self._custom_msg_box("question", "Rollback Successful", "Rollback completed")
         except Exception as e:
-            self._log(f"回退失败: {e}")
-            self._custom_msg_box("question", "回退失败", str(e))
+            self._log(f"Rollback failed: {e}")
+            self._custom_msg_box("question", "Rollback Failed", str(e))
 
 
 def main():

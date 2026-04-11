@@ -71,26 +71,26 @@ def verify_structure(source_dir: str, target_dir: str, logger=None) -> bool:
     source_dir = _expand_path(source_dir)
     if not os.path.isdir(source_dir):
         if logger:
-            logger(f"源目录不存在: {source_dir}")
+            logger(f"Source directory does not exist: {source_dir}")
         return False
 
     if is_remote(target_dir):
         # For remote targets, we only verify source exists and is non-empty
         if logger:
-            logger(f"远程目标跳过本地结构校验: {target_dir}")
+            logger(f"Remote target, skipping local structure verification: {target_dir}")
         return True
 
     target_dir = _expand_path(target_dir)
     if not os.path.isdir(target_dir):
         if logger:
-            logger(f"目标目录不存在，将创建: {target_dir}")
+            logger(f"Target directory does not exist, will create: {target_dir}")
         return True
 
     source_items = _list_visible(source_dir)
     target_items = _list_visible(target_dir)
 
     if logger:
-        logger(f"源可见文件数: {len(source_items)}, 目标可见文件数: {len(target_items)}")
+        logger(f"Source visible files: {len(source_items)}, Target visible files: {len(target_items)}")
 
     # Consider compatible if at least one overlapping relative path exists
     # OR if target has no visible files (empty target is always compatible)
@@ -102,7 +102,7 @@ def verify_structure(source_dir: str, target_dir: str, logger=None) -> bool:
         return True
 
     if logger:
-        logger("结构校验: 无可见文件交集")
+        logger("Structure verification: no visible file overlap")
     return False
 
 
@@ -126,13 +126,13 @@ def check_patch_compatibility(output_dir: str, target_dir: str, logger=None):
     output_dir = _expand_path(output_dir)
     if is_remote(target_dir):
         if logger:
-            logger(f"远程目标跳过兼容性检查: {target_dir}")
+            logger(f"Remote target, skipping compatibility check: {target_dir}")
         return "remote", {}
 
     target_dir = _expand_path(target_dir)
     if not os.path.isdir(target_dir):
         if logger:
-            logger(f"目标目录不存在，将创建: {target_dir}")
+            logger(f"Target directory does not exist, will create: {target_dir}")
         return "empty_target", {}
 
     output_items = {name for name in os.listdir(output_dir) if not name.startswith('.')}
@@ -157,16 +157,16 @@ def check_patch_compatibility(output_dir: str, target_dir: str, logger=None):
             mismatch.append(name)
             mismatch_info.append({
                 "name": name,
-                "output_type": "目录" if out_is_dir else "文件",
-                "target_type": "目录" if tgt_is_dir else "文件",
+                "output_type": "directory" if out_is_dir else "file",
+                "target_type": "directory" if tgt_is_dir else "file",
             })
 
     if logger:
-        logger(f"Output 项: {sorted(output_items)}")
-        logger(f"Target 项: {sorted(target_items)}")
-        logger(f"交集: {sorted(overlap)}, 仅 Output 有: {only_output}")
+        logger(f"Output items: {sorted(output_items)}")
+        logger(f"Target items: {sorted(target_items)}")
+        logger(f"Overlap: {sorted(overlap)}, Only in output: {only_output}")
         if mismatch:
-            logger(f"类型不一致: {mismatch}")
+            logger(f"Type mismatch: {mismatch}")
 
     details = {
         "only_output": only_output[:10],
@@ -185,7 +185,7 @@ def check_patch_compatibility(output_dir: str, target_dir: str, logger=None):
 def _run_cmd(cmd: list, logger=None) -> int:
     """Run a shell command and stream output to logger."""
     if logger:
-        logger(f"执行命令: {' '.join(cmd)}")
+        logger(f"Executing command: {' '.join(cmd)}")
     try:
         proc = subprocess.Popen(
             cmd,
@@ -203,7 +203,7 @@ def _run_cmd(cmd: list, logger=None) -> int:
         return proc.returncode
     except Exception as e:
         if logger:
-            logger(f"命令执行异常: {e}")
+            logger(f"Command execution failed: {e}")
         return -1
 
 
@@ -219,12 +219,12 @@ def _copy_dir_local(source_dir: str, dest_dir: str, logger=None) -> bool:
             else:
                 shutil.copy2(src_item, dst_item)
         if logger:
-            logger(f"本地复制完成: {source_dir} -> {dest_dir}")
+            logger(f"Local copy completed: {source_dir} -> {dest_dir}")
         return True
     else:
         shutil.copytree(source_dir, dest_dir, dirs_exist_ok=True)
         if logger:
-            logger(f"本地复制完成: {source_dir} -> {dest_dir}")
+            logger(f"Local copy completed: {source_dir} -> {dest_dir}")
         return True
 
 
@@ -240,11 +240,11 @@ def _copy_dir_remote(source_dir: str, remote_path: str, password: str, logger=No
         user_host, f"mkdir -p {remote_dir}"
     ]
     if logger:
-        logger(f"执行命令: {' '.join(mkdir_cmd[:2])} *** {' '.join(mkdir_cmd[3:])}")
+        logger(f"Executing command: {' '.join(mkdir_cmd[:2])} *** {' '.join(mkdir_cmd[3:])}")
     ret = _run_cmd(mkdir_cmd, logger)
     if ret != 0:
         if logger:
-            logger("远程目录创建失败，继续尝试复制...")
+            logger("Remote directory creation failed, continuing with copy attempt...")
 
     # scp -r source_dir/* user@host:/remote_dir/
     # Build file list inside source_dir and scp each to remote
@@ -259,14 +259,14 @@ def _copy_dir_remote(source_dir: str, remote_path: str, password: str, logger=No
         dest_uri = f"{user_host}:{remote_dir}/"
         cmd = cmd_base + [src_item, dest_uri]
         if logger:
-            logger(f"执行命令: sshpass -p *** scp -r ... {src_item} {dest_uri}")
+            logger(f"Executing command: sshpass -p *** scp -r ... {src_item} {dest_uri}")
         ret = _run_cmd(cmd, logger)
         if ret != 0:
             if logger:
-                logger(f"复制失败: {src_item}")
+                logger(f"Copy failed: {src_item}")
             return False
     if logger:
-        logger("远程复制完成")
+        logger("Remote copy completed")
     return True
 
 
@@ -287,12 +287,12 @@ def _backup_from_remote(remote_path: str, backup_dir: str, password: str, logger
         f"{user_host}:{remote_dir}", dest_path,
     ]
     if logger:
-        logger(f"执行命令: sshpass -p *** scp -r ... {user_host}:{remote_dir} {dest_path}")
+        logger(f"Executing command: sshpass -p *** scp -r ... {user_host}:{remote_dir} {dest_path}")
     ret = _run_cmd(cmd, logger)
     if ret != 0:
-        raise RuntimeError(f"远程备份失败: {user_host}:{remote_dir} -> {dest_path}")
+        raise RuntimeError(f"Remote backup failed: {user_host}:{remote_dir} -> {dest_path}")
     if logger:
-        logger(f"远程备份完成: {user_host}:{remote_dir} -> {dest_path}")
+        logger(f"Remote backup completed: {user_host}:{remote_dir} -> {dest_path}")
     return dest_path
 
 
@@ -302,7 +302,7 @@ def backup(target_dir: str, backup_dir: str, password: str = "", logger=None) ->
 
     if is_remote(target_dir):
         if not password:
-            raise ValueError("远程 Target 备份需要 SSH 密码")
+            raise ValueError("Remote target backup requires SSH password")
         return _backup_from_remote(target_dir, backup_dir, password, logger)
 
     target_dir = _expand_path(target_dir)
@@ -319,14 +319,14 @@ def backup(target_dir: str, backup_dir: str, password: str = "", logger=None) ->
     # Use cp -r command for logging, but fallback to shutil.copytree
     cmd = ["cp", "-r", target_dir, dest_path]
     if logger:
-        logger(f"执行命令: {' '.join(cmd)}")
+        logger(f"Executing command: {' '.join(cmd)}")
     ret = _run_cmd(cmd, logger)
     if ret != 0:
         if logger:
-            logger(f"cp 命令失败，改用 shutil 复制...")
+            logger(f"cp command failed, falling back to shutil copy...")
         shutil.copytree(target_dir, dest_path)
         if logger:
-            logger(f"本地复制完成: {target_dir} -> {dest_path}")
+            logger(f"Local copy completed: {target_dir} -> {dest_path}")
 
     return dest_path
 
@@ -347,11 +347,11 @@ def patch(output_dir: str, target_dir: str, password: str = "", logger=None) -> 
         # Use rsync if available, otherwise cp -r then merge
         cmd = ["cp", "-r", output_dir + "/.", target_dir]
         if logger:
-            logger(f"执行命令: cp -r {output_dir}/. {target_dir}")
+            logger(f"Executing command: cp -r {output_dir}/. {target_dir}")
         ret = _run_cmd(["cp", "-r", output_dir + "/.", target_dir], logger)
         if ret != 0:
             if logger:
-                logger("cp 命令失败，改用 shutil 复制...")
+                logger("cp command failed, falling back to shutil copy...")
             _copy_dir_local(output_dir, target_dir, logger)
         return True
 
@@ -368,10 +368,10 @@ def rollback(backup_timestamp_dir: str, target_dir: str, password: str = "", log
         target_dir = _expand_path(target_dir)
         os.makedirs(target_dir, exist_ok=True)
         if logger:
-            logger(f"执行命令: cp -r {backup_timestamp_dir}/. {target_dir}")
+            logger(f"Executing command: cp -r {backup_timestamp_dir}/. {target_dir}")
         ret = _run_cmd(["cp", "-r", backup_timestamp_dir + "/.", target_dir], logger)
         if ret != 0:
             if logger:
-                logger("cp 命令失败，改用 shutil 复制...")
+                logger("cp command failed, falling back to shutil copy...")
             _copy_dir_local(backup_timestamp_dir, target_dir, logger)
         return True
