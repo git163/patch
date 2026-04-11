@@ -22,7 +22,7 @@ try:
     )
     from PySide2.QtSvg import QSvgRenderer
     from PySide2.QtGui import QPixmap, QPainter
-    from PySide2.QtCore import Qt
+    from PySide2.QtCore import Qt, QThread, Signal
 except ImportError:
     from PySide6.QtWidgets import (
         QApplication, QWidget, QVBoxLayout, QHBoxLayout,
@@ -32,7 +32,7 @@ except ImportError:
     )
     from PySide6.QtSvg import QSvgRenderer
     from PySide6.QtGui import QPixmap, QPainter
-    from PySide6.QtCore import Qt
+    from PySide6.QtCore import Qt, QThread, Signal
 
 from lib.backup_lib import (
     patch, rollback, list_backups,
@@ -46,6 +46,64 @@ DEFAULT_CONFIG_PATH = os.path.join(
 )
 
 
+class _ListRemoteThread(QThread):
+    """Background thread to list remote directory via ssh."""
+    finished = Signal(bool, str, list)
+
+    def __init__(self, password: str, user_host: str, remote_dir: str, parent=None):
+        super().__init__(parent)
+        self.password = password
+        self.user_host = user_host
+        self.remote_dir = remote_dir
+
+    def run(self):
+        cmd = [
+            "sshpass", "-p", self.password,
+            "ssh", "-o", "StrictHostKeyChecking=no",
+            "-o", "UserKnownHostsFile=/dev/null",
+            self.user_host, f"ls -F1 {shlex.quote(self.remote_dir)}"
+        ]
+        try:
+            proc = subprocess.run(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                errors="replace",
+            )
+            if proc.returncode != 0:
+                self.finished.emit(False, proc.stderr.strip(), [])
+                return
+            lines = []
+            for line in proc.stdout.splitlines():
+                line = line.strip()
+                if line and line not in (".", ".."):
+                    lines.append(line)
+            self.finished.emit(True, "", lines)
+        except Exception as e:
+            self.finished.emit(False, str(e), [])
+
+
+class _WorkerThread(QThread):
+    """Generic background worker that emits log lines and a finished signal."""
+    log_msg = Signal(str)
+    finished = Signal(bool, str)
+
+    def __init__(self, func, parent=None):
+        super().__init__(parent)
+        self.func = func
+
+    def _thread_log(self, msg: str):
+        self.log_msg.emit(msg)
+
+    def run(self):
+        try:
+            self.func(logger=self._thread_log)
+            self.finished.emit(True, "")
+        except Exception as e:
+            self.finished.emit(False, str(e))
+
+
 class RemoteDirDialog(QDialog):
     """Simple remote directory browser via sshpass + ssh."""
 
@@ -53,6 +111,7 @@ class RemoteDirDialog(QDialog):
         super().__init__(parent)
         self.password = password
         self.selected_path = initial_path
+        self._thread = None
         self._build_ui(initial_path)
         self._refresh()
 
@@ -77,6 +136,10 @@ class RemoteDirDialog(QDialog):
         self.list_widget.itemDoubleClicked.connect(self._on_double_click)
         layout.addWidget(self.list_widget)
 
+        self.status_label = QLabel("Loading...")
+        self.status_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.status_label)
+
         btn_layout = QHBoxLayout()
         btn_layout.addStretch()
         self.btn_select = QPushButton("Select")
@@ -86,6 +149,13 @@ class RemoteDirDialog(QDialog):
         btn_layout.addWidget(self.btn_select)
         btn_layout.addWidget(self.btn_cancel)
         layout.addLayout(btn_layout)
+
+    def _set_loading(self, loading: bool):
+        self.status_label.setVisible(loading)
+        self.btn_up.setEnabled(not loading)
+        self.btn_refresh.setEnabled(not loading)
+        self.list_widget.setEnabled(not loading)
+        self.btn_select.setEnabled(not loading)
 
     def _on_up(self):
         try:
@@ -111,33 +181,19 @@ class RemoteDirDialog(QDialog):
             QMessageBox.warning(self, "No Password", "SSH password is required for remote browsing.")
             return
 
-        cmd = [
-            "sshpass", "-p", self.password,
-            "ssh", "-o", "StrictHostKeyChecking=no",
-            "-o", "UserKnownHostsFile=/dev/null",
-            user_host, f"ls -F1 {shlex.quote(remote_dir)}"
-        ]
-        try:
-            proc = subprocess.run(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                errors="replace",
-            )
-            if proc.returncode != 0:
-                self.list_widget.clear()
-                QMessageBox.warning(self, "Error", f"Failed to list directory:\n{proc.stderr.strip()}")
-                return
-        except Exception as e:
-            QMessageBox.warning(self, "Error", str(e))
+        self._set_loading(True)
+        self.list_widget.clear()
+        self._thread = _ListRemoteThread(self.password, user_host, remote_dir, self)
+        self._thread.finished.connect(self._on_refresh_finished)
+        self._thread.start()
+
+    def _on_refresh_finished(self, ok: bool, error: str, lines: list):
+        self._set_loading(False)
+        if not ok:
+            QMessageBox.warning(self, "Error", f"Failed to list directory:\n{error}")
             return
 
-        self.list_widget.clear()
-        for line in proc.stdout.splitlines():
-            line = line.strip()
-            if not line or line in (".", ".."):
-                continue
+        for line in lines:
             # ls -F appends / for directories, etc.
             name = line.rstrip("*=@|>")
             item = QListWidgetItem(name)
@@ -165,6 +221,12 @@ class RemoteDirDialog(QDialog):
         self.selected_path = self.edit_path.text().strip()
         super().accept()
 
+    def reject(self):
+        if self._thread and self._thread.isRunning():
+            self._thread.terminate()
+            self._thread.wait()
+        super().reject()
+
     @staticmethod
     def get_selected_path(parent, initial_path: str, password: str) -> str:
         dialog = RemoteDirDialog(parent, initial_path or "", password or "")
@@ -178,6 +240,7 @@ class MainWindow(QWidget):
         super().__init__()
         self.setWindowTitle("Auto Backup and Patch Tool")
         self.resize(700, 600)
+        self._worker = None
         self._build_ui()
         self._load_config(DEFAULT_CONFIG_PATH)
 
@@ -534,6 +597,36 @@ class MainWindow(QWidget):
         except Exception as e:
             self._log(f"Failed to load params: {e}")
 
+    def _set_busy(self, busy: bool):
+        widgets = [
+            self.btn_patch, self.btn_rollback,
+            self.btn_save, self.btn_load,
+            self.btn_browse_backup, self.btn_browse_output, self.btn_browse_target,
+        ]
+        for w in widgets:
+            w.setEnabled(not busy)
+        if busy:
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+        else:
+            QApplication.restoreOverrideCursor()
+
+    def _start_worker(self, func, success_title: str, success_msg: str):
+        self._set_busy(True)
+        self._worker = _WorkerThread(func, self)
+        self._worker.log_msg.connect(self._log)
+
+        def on_finished(success, error):
+            self._set_busy(False)
+            if success:
+                self._custom_msg_box("question", success_title, success_msg)
+            else:
+                self._log(f"{success_title} failed: {error}")
+                self._custom_msg_box("question", f"{success_title} Failed", error)
+            self._worker = None
+
+        self._worker.finished.connect(on_finished)
+        self._worker.start()
+
     def _on_patch(self):
         data = self._get_inputs()
         output_dir = data["output"]
@@ -627,23 +720,21 @@ class MainWindow(QWidget):
             return
 
         self._log("Starting patch...")
-        try:
+
+        def patch_worker(logger):
             if backup_dir:
                 backup_path = backup_overlapping_files(
                     output_dir, target_dir, backup_dir,
-                    password=password, logger=self._log
+                    password=password, logger=logger
                 )
                 if backup_path:
-                    self._log(f"Overwrite backup completed: {backup_path}")
+                    logger(f"Overwrite backup completed: {backup_path}")
             else:
-                self._log("Warning: Backup directory not set, skipping overwrite backup")
+                logger("Warning: Backup directory not set, skipping overwrite backup")
+            patch(output_dir, target_dir, password=password, logger=logger)
+            logger("Patch completed")
 
-            patch(output_dir, target_dir, password=password, logger=self._log)
-            self._log("Patch completed")
-            self._custom_msg_box("question", "Patch Successful", "Patch completed")
-        except Exception as e:
-            self._log(f"Patch failed: {e}")
-            self._custom_msg_box("question", "Patch Failed", str(e))
+        self._start_worker(patch_worker, "Patch Successful", "Patch completed")
 
     def _on_rollback(self):
         data = self._get_inputs()
@@ -750,13 +841,12 @@ class MainWindow(QWidget):
             return
 
         self._log("Starting rollback...")
-        try:
-            rollback(selected_dir, target_dir, password=password, logger=self._log)
-            self._log("Rollback completed")
-            self._custom_msg_box("question", "Rollback Successful", "Rollback completed")
-        except Exception as e:
-            self._log(f"Rollback failed: {e}")
-            self._custom_msg_box("question", "Rollback Failed", str(e))
+
+        def rollback_worker(logger):
+            rollback(selected_dir, target_dir, password=password, logger=logger)
+            logger("Rollback completed")
+
+        self._start_worker(rollback_worker, "Rollback Successful", "Rollback completed")
 
 
 def main():
