@@ -64,49 +64,6 @@ def _list_visible(root: str) -> list:
     return sorted(items)
 
 
-def verify_structure(source_dir: str, target_dir: str, logger=None) -> bool:
-    """
-    Verify that directory structures are compatible (ignoring hidden files).
-    For remote, only basic checks on source side.
-    """
-    source_dir = _expand_path(source_dir)
-    if not os.path.isdir(source_dir):
-        if logger:
-            logger(f"Source directory does not exist: {source_dir}")
-        return False
-
-    if is_remote(target_dir):
-        # For remote targets, we only verify source exists and is non-empty
-        if logger:
-            logger(f"Remote target, skipping local structure verification: {target_dir}")
-        return True
-
-    target_dir = _expand_path(target_dir)
-    if not os.path.isdir(target_dir):
-        if logger:
-            logger(f"Target directory does not exist, will create: {target_dir}")
-        return True
-
-    source_items = _list_visible(source_dir)
-    target_items = _list_visible(target_dir)
-
-    if logger:
-        logger(f"Source visible files: {len(source_items)}, Target visible files: {len(target_items)}")
-
-    # Consider compatible if at least one overlapping relative path exists
-    # OR if target has no visible files (empty target is always compatible)
-    if not target_items:
-        return True
-
-    overlap = set(source_items) & set(target_items)
-    if overlap:
-        return True
-
-    if logger:
-        logger("Structure verification: no visible file overlap")
-    return False
-
-
 def check_patch_compatibility(output_dir: str, target_dir: str, password: str = "", logger=None):
     """
     Check compatibility between output_dir and target_dir for patching.
@@ -353,7 +310,7 @@ def _copy_dir_remote(source_dir: str, remote_path: str, password: str, logger=No
         "sshpass", "-p", password,
         "ssh", "-o", "StrictHostKeyChecking=no",
         "-o", "UserKnownHostsFile=/dev/null",
-        user_host, f"mkdir -p {remote_dir}"
+        user_host, f"mkdir -p {shlex.quote(remote_dir)}"
     ]
     if logger:
         logger(f"Executing command: {' '.join(mkdir_cmd[:2])} *** {' '.join(mkdir_cmd[3:])}")
@@ -373,6 +330,19 @@ def _copy_dir_remote(source_dir: str, remote_path: str, password: str, logger=No
     for item in os.listdir(source_dir):
         src_item = os.path.join(source_dir, item)
         dest_uri = f"{user_host}:{remote_dir}/"
+
+        # Remove remote counterpart first to avoid nested directory bug
+        # (scp -r src_item user@host:/remote_dir/ copies into existing dir)
+        rm_cmd = [
+            "sshpass", "-p", password,
+            "ssh", "-o", "StrictHostKeyChecking=no",
+            "-o", "UserKnownHostsFile=/dev/null",
+            user_host, f"rm -rf {shlex.quote(os.path.join(remote_dir, item))}"
+        ]
+        if logger:
+            logger(f"Executing command: sshpass -p *** ssh ... rm -rf {shlex.quote(os.path.join(remote_dir, item))}")
+        _run_cmd(rm_cmd, logger)
+
         cmd = cmd_base + [src_item, dest_uri]
         if logger:
             logger(f"Executing command: sshpass -p *** scp -r ... {src_item} {dest_uri}")
