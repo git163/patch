@@ -3,6 +3,8 @@
 
 import json
 import os
+import shlex
+import subprocess
 import sys
 
 # Add project root to sys.path so lib can be imported
@@ -15,7 +17,8 @@ try:
     from PySide2.QtWidgets import (
         QApplication, QWidget, QVBoxLayout, QHBoxLayout,
         QLabel, QLineEdit, QPushButton, QTextEdit,
-        QMessageBox, QInputDialog, QDialog, QFileDialog
+        QMessageBox, QInputDialog, QDialog, QFileDialog,
+        QListWidget, QListWidgetItem, QStyle,
     )
     from PySide2.QtSvg import QSvgRenderer
     from PySide2.QtGui import QPixmap, QPainter
@@ -24,7 +27,8 @@ except ImportError:
     from PySide6.QtWidgets import (
         QApplication, QWidget, QVBoxLayout, QHBoxLayout,
         QLabel, QLineEdit, QPushButton, QTextEdit,
-        QMessageBox, QInputDialog, QDialog, QFileDialog
+        QMessageBox, QInputDialog, QDialog, QFileDialog,
+        QListWidget, QListWidgetItem, QStyle,
     )
     from PySide6.QtSvg import QSvgRenderer
     from PySide6.QtGui import QPixmap, QPainter
@@ -32,7 +36,7 @@ except ImportError:
 
 from lib.backup_lib import (
     patch, rollback, list_backups,
-    is_remote, check_patch_compatibility,
+    is_remote, parse_remote, check_patch_compatibility,
     find_overlapping_paths, backup_overlapping_files,
 )
 
@@ -40,6 +44,133 @@ from lib.backup_lib import (
 DEFAULT_CONFIG_PATH = os.path.join(
     os.path.dirname(__file__), "..", "conf", "config.json"
 )
+
+
+class RemoteDirDialog(QDialog):
+    """Simple remote directory browser via sshpass + ssh."""
+
+    def __init__(self, parent, initial_path: str, password: str):
+        super().__init__(parent)
+        self.password = password
+        self.selected_path = initial_path
+        self._build_ui(initial_path)
+        self._refresh()
+
+    def _build_ui(self, initial_path):
+        self.setWindowTitle("Remote Directory Browser")
+        self.resize(600, 500)
+        layout = QVBoxLayout(self)
+
+        path_layout = QHBoxLayout()
+        path_layout.addWidget(QLabel("Path:"))
+        self.edit_path = QLineEdit(initial_path)
+        path_layout.addWidget(self.edit_path)
+        self.btn_up = QPushButton("Up")
+        self.btn_refresh = QPushButton("Refresh")
+        self.btn_up.clicked.connect(self._on_up)
+        self.btn_refresh.clicked.connect(self._refresh)
+        path_layout.addWidget(self.btn_up)
+        path_layout.addWidget(self.btn_refresh)
+        layout.addLayout(path_layout)
+
+        self.list_widget = QListWidget()
+        self.list_widget.itemDoubleClicked.connect(self._on_double_click)
+        layout.addWidget(self.list_widget)
+
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+        self.btn_select = QPushButton("Select")
+        self.btn_cancel = QPushButton("Cancel")
+        self.btn_select.clicked.connect(self.accept)
+        self.btn_cancel.clicked.connect(self.reject)
+        btn_layout.addWidget(self.btn_select)
+        btn_layout.addWidget(self.btn_cancel)
+        layout.addLayout(btn_layout)
+
+    def _on_up(self):
+        try:
+            user_host, remote_dir = parse_remote(self.edit_path.text().strip())
+        except Exception:
+            return
+        remote_dir = remote_dir.rstrip("/")
+        parent = os.path.dirname(remote_dir)
+        if not parent or parent == remote_dir:
+            parent = remote_dir
+        self.edit_path.setText(f"{user_host}:{parent}")
+        self._refresh()
+
+    def _refresh(self):
+        path = self.edit_path.text().strip()
+        try:
+            user_host, remote_dir = parse_remote(path)
+        except Exception:
+            self.list_widget.clear()
+            return
+
+        if not self.password:
+            QMessageBox.warning(self, "No Password", "SSH password is required for remote browsing.")
+            return
+
+        cmd = [
+            "sshpass", "-p", self.password,
+            "ssh", "-o", "StrictHostKeyChecking=no",
+            "-o", "UserKnownHostsFile=/dev/null",
+            user_host, f"ls -F1 {shlex.quote(remote_dir)}"
+        ]
+        try:
+            proc = subprocess.run(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                errors="replace",
+            )
+            if proc.returncode != 0:
+                self.list_widget.clear()
+                QMessageBox.warning(self, "Error", f"Failed to list directory:\n{proc.stderr.strip()}")
+                return
+        except Exception as e:
+            QMessageBox.warning(self, "Error", str(e))
+            return
+
+        self.list_widget.clear()
+        for line in proc.stdout.splitlines():
+            line = line.strip()
+            if not line or line in (".", ".."):
+                continue
+            # ls -F appends / for directories, etc.
+            name = line.rstrip("*=@|>")
+            item = QListWidgetItem(name)
+            if line.endswith("/"):
+                item.setIcon(self.style().standardIcon(QStyle.SP_DirIcon))
+            else:
+                item.setIcon(self.style().standardIcon(QStyle.SP_FileIcon))
+            item.setData(Qt.UserRole, line)
+            self.list_widget.addItem(item)
+
+    def _on_double_click(self, item):
+        raw = item.data(Qt.UserRole)
+        if not raw or not raw.endswith("/"):
+            return
+        name = raw.rstrip("/")
+        try:
+            user_host, remote_dir = parse_remote(self.edit_path.text().strip())
+        except Exception:
+            return
+        new_dir = os.path.join(remote_dir, name).replace("\\", "/")
+        self.edit_path.setText(f"{user_host}:{new_dir}")
+        self._refresh()
+
+    def accept(self):
+        self.selected_path = self.edit_path.text().strip()
+        super().accept()
+
+    @staticmethod
+    def get_selected_path(parent, initial_path: str, password: str) -> str:
+        dialog = RemoteDirDialog(parent, initial_path or "", password or "")
+        if dialog.exec() == QDialog.Accepted:
+            return dialog.selected_path
+        return initial_path
 
 
 class MainWindow(QWidget):
@@ -75,13 +206,31 @@ class MainWindow(QWidget):
         self.edit_target = QLineEdit()
 
         layout.addWidget(QLabel("Backup Dir:"))
-        layout.addWidget(self.edit_backup)
+        backup_layout = QHBoxLayout()
+        backup_layout.addWidget(self.edit_backup)
+        self.btn_browse_backup = QPushButton("...")
+        self.btn_browse_backup.setFixedWidth(40)
+        self.btn_browse_backup.clicked.connect(self._on_browse_backup)
+        backup_layout.addWidget(self.btn_browse_backup)
+        layout.addLayout(backup_layout)
 
         layout.addWidget(QLabel("Output Dir:"))
-        layout.addWidget(self.edit_output)
+        output_layout = QHBoxLayout()
+        output_layout.addWidget(self.edit_output)
+        self.btn_browse_output = QPushButton("...")
+        self.btn_browse_output.setFixedWidth(40)
+        self.btn_browse_output.clicked.connect(self._on_browse_output)
+        output_layout.addWidget(self.btn_browse_output)
+        layout.addLayout(output_layout)
 
         layout.addWidget(QLabel("Target Dir (local path or user@ip:/path for remote):"))
-        layout.addWidget(self.edit_target)
+        target_layout = QHBoxLayout()
+        target_layout.addWidget(self.edit_target)
+        self.btn_browse_target = QPushButton("...")
+        self.btn_browse_target.setFixedWidth(40)
+        self.btn_browse_target.clicked.connect(self._on_browse_target)
+        target_layout.addWidget(self.btn_browse_target)
+        layout.addLayout(target_layout)
 
         layout.addWidget(QLabel("SSH Password (only for remote):"))
         pwd_layout = QHBoxLayout()
@@ -327,6 +476,31 @@ class MainWindow(QWidget):
                 self._log(f"Failed to load config: {e}")
         else:
             self._log(f"Default config file does not exist: {path}")
+
+    def _on_browse_backup(self):
+        start_dir = self.edit_backup.text().strip() or os.path.expanduser("~")
+        path = QFileDialog.getExistingDirectory(self, "Select Backup Directory", start_dir)
+        if path:
+            self.edit_backup.setText(path)
+
+    def _on_browse_output(self):
+        start_dir = self.edit_output.text().strip() or os.path.expanduser("~")
+        path = QFileDialog.getExistingDirectory(self, "Select Output Directory", start_dir)
+        if path:
+            self.edit_output.setText(path)
+
+    def _on_browse_target(self):
+        current = self.edit_target.text().strip()
+        if not current or not is_remote(current):
+            start_dir = current or os.path.expanduser("~")
+            path = QFileDialog.getExistingDirectory(self, "Select Target Directory", start_dir)
+            if path:
+                self.edit_target.setText(path)
+        else:
+            password = self.edit_password.text().strip()
+            new_path = RemoteDirDialog.get_selected_path(self, current, password)
+            if new_path:
+                self.edit_target.setText(new_path)
 
     def _on_exit(self):
         self._log("Exiting program")
