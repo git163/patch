@@ -8,6 +8,7 @@ import re
 import subprocess
 import shlex
 from datetime import datetime
+from typing import Optional
 
 
 def _expand_path(path: str) -> str:
@@ -280,6 +281,19 @@ def _list_remote_paths(remote_path: str, password: str, logger=None) -> list:
     return sorted([line.strip() for line in lines if line.strip()])
 
 
+def _remove_if_empty(dir_path: str, logger=None) -> bool:
+    """Remove directory if it exists and contains no files (even inside subdirs). Return True if removed."""
+    if not os.path.isdir(dir_path):
+        return False
+    for _, _, filenames in os.walk(dir_path):
+        if filenames:
+            return False
+    shutil.rmtree(dir_path)
+    if logger:
+        logger(f"Removed empty backup directory: {dir_path}")
+    return True
+
+
 def _copy_dir_local(source_dir: str, dest_dir: str, logger=None) -> bool:
     """Local copy. If dest exists and is a directory, copy contents into it."""
     if os.path.exists(dest_dir) and os.path.isdir(dest_dir):
@@ -356,7 +370,7 @@ def _copy_dir_remote(source_dir: str, remote_path: str, password: str, logger=No
     return True
 
 
-def _backup_from_remote(remote_path: str, backup_dir: str, password: str, logger=None) -> str:
+def _backup_from_remote(remote_path: str, backup_dir: str, password: str, logger=None) -> Optional[str]:
     """Backup remote directory to local via scp using sshpass."""
     user_host, remote_dir = parse_remote(remote_path)
     basename = os.path.basename(os.path.normpath(remote_dir)) or "remote_backup"
@@ -379,10 +393,12 @@ def _backup_from_remote(remote_path: str, backup_dir: str, password: str, logger
         raise RuntimeError(f"Remote backup failed: {user_host}:{remote_dir} -> {dest_path}")
     if logger:
         logger(f"Remote backup completed: {user_host}:{remote_dir} -> {dest_path}")
+    if _remove_if_empty(dest_path, logger):
+        return None
     return dest_path
 
 
-def backup(target_dir: str, backup_dir: str, password: str = "", logger=None) -> str:
+def backup(target_dir: str, backup_dir: str, password: str = "", logger=None) -> Optional[str]:
     """Backup target_dir into backup_dir/target_basename_YYYYMMDD_HHMMSS/."""
     backup_dir = _expand_path(backup_dir)
 
@@ -414,6 +430,8 @@ def backup(target_dir: str, backup_dir: str, password: str = "", logger=None) ->
         if logger:
             logger(f"Local copy completed: {target_dir} -> {dest_path}")
 
+    if _remove_if_empty(dest_path, logger):
+        return None
     return dest_path
 
 
@@ -510,6 +528,11 @@ def backup_overlapping_files(output_dir: str, target_dir: str, backup_dir: str, 
             shutil.copytree(src, dst, dirs_exist_ok=True)
         else:
             shutil.copy2(src, dst)
+
+    if _remove_if_empty(dest_path, logger):
+        if logger:
+            logger("No files were actually backed up, removed empty directory")
+        return None
 
     if logger:
         logger(f"Backed up {len(filtered)} overlapping item(s) to {dest_path}")
