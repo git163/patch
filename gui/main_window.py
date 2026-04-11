@@ -32,7 +32,8 @@ except ImportError:
 
 from lib.backup_lib import (
     backup, patch, rollback, list_backups,
-    is_remote, check_patch_compatibility
+    is_remote, check_patch_compatibility,
+    find_overlapping_paths, backup_overlapping_files,
 )
 
 
@@ -416,6 +417,7 @@ class MainWindow(QWidget):
         output_dir = data["output"]
         target_dir = data["target"]
         password = data["ssh_password"]
+        backup_dir = data["backup"]
 
         if not output_dir:
             self._custom_msg_box("question", "Input Error", "Output directory cannot be empty")
@@ -470,12 +472,29 @@ class MainWindow(QWidget):
                 self._log("User cancelled patching")
                 return
 
+        # Detect overlapping files that will be overwritten
+        overlapping_files = []
+        if not is_remote(target_dir):
+            overlapping_files = find_overlapping_paths(output_dir, target_dir)
+            if overlapping_files:
+                self._log(f"Detected {len(overlapping_files)} overlapping file(s)/dir(s) that will be overwritten")
+
+        confirm_html = self._fmt_paths_html("About to execute patch", [
+            ("Output", output_dir),
+            ("Target", target_dir),
+        ])
+        if overlapping_files:
+            confirm_html += "<br><b>The following file(s)/dir(s) will be overwritten:</b><br><ul>"
+            for f in overlapping_files[:20]:
+                confirm_html += f"<li><code>{f}</code></li>"
+            if len(overlapping_files) > 20:
+                confirm_html += f"<li>... and {len(overlapping_files) - 20} more</li>"
+            confirm_html += "</ul>"
+        confirm_html += "<br>Continue?"
+
         reply = self._custom_msg_box(
             "question", "Confirm Patch",
-            self._fmt_paths_html("About to execute patch", [
-                ("Output", output_dir),
-                ("Target", target_dir),
-            ]) + "<br>Continue?",
+            confirm_html,
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No
         )
@@ -485,6 +504,16 @@ class MainWindow(QWidget):
 
         self._log("Starting patch...")
         try:
+            if backup_dir:
+                backup_path = backup_overlapping_files(
+                    output_dir, target_dir, backup_dir,
+                    password=password, logger=self._log
+                )
+                if backup_path:
+                    self._log(f"Overwrite backup completed: {backup_path}")
+            else:
+                self._log("Warning: Backup directory not set, skipping overwrite backup")
+
             patch(output_dir, target_dir, password=password, logger=self._log)
             self._log("Patch completed")
             self._custom_msg_box("question", "Patch Successful", "Patch completed")

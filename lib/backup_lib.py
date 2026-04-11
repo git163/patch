@@ -331,6 +331,90 @@ def backup(target_dir: str, backup_dir: str, password: str = "", logger=None) ->
     return dest_path
 
 
+def find_overlapping_paths(output_dir: str, target_dir: str) -> list:
+    """Return sorted list of relative paths that exist in both output and target."""
+    output_dir = _expand_path(output_dir)
+    target_dir = _expand_path(target_dir)
+    if is_remote(target_dir) or not os.path.isdir(target_dir) or not os.path.isdir(output_dir):
+        return []
+
+    overlaps = []
+    for dirpath, dirnames, filenames in os.walk(output_dir):
+        rel_dir = os.path.relpath(dirpath, output_dir)
+        if rel_dir == '.':
+            rel_dir = ''
+        for name in dirnames + filenames:
+            rel_path = os.path.join(rel_dir, name) if rel_dir else name
+            if os.path.lexists(os.path.join(target_dir, rel_path)):
+                overlaps.append(rel_path)
+    return sorted(overlaps)
+
+
+def backup_overlapping_files(output_dir: str, target_dir: str, backup_dir: str, password: str = "", logger=None):
+    """
+    Backup files in target_dir that would be overwritten by output_dir.
+
+    For local targets: backs up only overlapping files/dirs, preserving structure.
+    For remote targets: performs a full backup of target_dir.
+
+    Returns the backup directory path, or None if nothing to backup.
+    """
+    output_dir = _expand_path(output_dir)
+    backup_dir = _expand_path(backup_dir)
+
+    if is_remote(target_dir):
+        if not password:
+            raise ValueError("Remote target backup requires SSH password")
+        if logger:
+            logger("Remote target: performing full backup before patch")
+        return backup(target_dir, backup_dir, password=password, logger=logger)
+
+    target_dir = _expand_path(target_dir)
+    if not os.path.isdir(target_dir) or not os.path.isdir(output_dir):
+        return None
+
+    overlaps = find_overlapping_paths(output_dir, target_dir)
+    if not overlaps:
+        if logger:
+            logger("No overlapping files to backup")
+        return None
+
+    # Filter out paths whose parent directory is also in the overlap list
+    overlap_set = set(overlaps)
+    filtered = []
+    for p in overlaps:
+        parent = os.path.dirname(p)
+        has_parent = False
+        while parent:
+            if parent in overlap_set:
+                has_parent = True
+                break
+            parent = os.path.dirname(parent)
+        if not has_parent:
+            filtered.append(p)
+
+    basename = os.path.basename(os.path.normpath(target_dir))
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    dest_name = f"{basename}_overwrite_{timestamp}"
+    dest_path = os.path.join(backup_dir, dest_name)
+    os.makedirs(dest_path, exist_ok=True)
+
+    for rel_path in filtered:
+        src = os.path.join(target_dir, rel_path)
+        dst = os.path.join(dest_path, rel_path)
+        dst_parent = os.path.dirname(dst)
+        if dst_parent and not os.path.exists(dst_parent):
+            os.makedirs(dst_parent, exist_ok=True)
+        if os.path.isdir(src):
+            shutil.copytree(src, dst, dirs_exist_ok=True)
+        else:
+            shutil.copy2(src, dst)
+
+    if logger:
+        logger(f"Backed up {len(filtered)} overlapping item(s) to {dest_path}")
+    return dest_path
+
+
 def patch(output_dir: str, target_dir: str, password: str = "", logger=None) -> bool:
     """Patch: copy output_dir into target_dir."""
     output_dir = _expand_path(output_dir)
