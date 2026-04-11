@@ -31,7 +31,7 @@ except ImportError:
     from PySide6.QtCore import Qt
 
 from lib.backup_lib import (
-    backup, patch, rollback, list_backups,
+    patch, rollback, list_backups,
     is_remote, check_patch_compatibility,
     find_overlapping_paths, backup_overlapping_files,
 )
@@ -96,13 +96,10 @@ class MainWindow(QWidget):
 
         # Action buttons
         action_layout = QHBoxLayout()
-        self.btn_backup = QPushButton("Backup")
         self.btn_patch = QPushButton("Patch")
         self.btn_rollback = QPushButton("Rollback")
-        self.btn_backup.clicked.connect(self._on_backup)
         self.btn_patch.clicked.connect(self._on_patch)
         self.btn_rollback.clicked.connect(self._on_rollback)
-        action_layout.addWidget(self.btn_backup)
         action_layout.addWidget(self.btn_patch)
         action_layout.addWidget(self.btn_rollback)
         layout.addLayout(action_layout)
@@ -363,55 +360,6 @@ class MainWindow(QWidget):
         except Exception as e:
             self._log(f"Failed to load params: {e}")
 
-    def _on_backup(self):
-        data = self._get_inputs()
-        backup_dir = data["backup"]
-        target_dir = data["target"]
-        password = data["ssh_password"]
-
-        if not backup_dir:
-            self._custom_msg_box("question", "Input Error", "Backup directory cannot be empty")
-            return
-        if not target_dir:
-            self._custom_msg_box("question", "Input Error", "Target directory cannot be empty")
-            return
-        if is_remote(target_dir) and not password:
-            self._custom_msg_box("question", "Input Error", "Remote target backup requires SSH password")
-            return
-        if not is_remote(target_dir):
-            if not self._ensure_local_dir(target_dir, "Target"):
-                return
-        if not self._ensure_local_dir(backup_dir, "Backup"):
-            return
-
-        reply = self._custom_msg_box(
-            "question", "Confirm Backup",
-            self._fmt_paths_html("About to execute backup", [
-                ("Target", target_dir),
-                ("Backup", backup_dir),
-            ]) + "<br>Continue?",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No
-        )
-        if reply != QMessageBox.Yes:
-            self._log("User cancelled backup")
-            return
-
-        self._log("Starting backup...")
-        try:
-            dest = backup(target_dir, backup_dir, password=password, logger=self._log)
-            self._log(f"Backup completed: {dest}")
-            self._custom_msg_box(
-                "question", "Backup Successful",
-                f"<b>Backup completed</b><br><br>"
-                f"<code style='font-size:13px;'>{dest}</code>"
-            )
-        except Exception as e:
-            self._log(f"Backup failed: {e}")
-            self._custom_msg_box(
-                "question", "Backup Failed", str(e)
-            )
-
     def _on_patch(self):
         data = self._get_inputs()
         output_dir = data["output"]
@@ -479,26 +427,27 @@ class MainWindow(QWidget):
             if overlapping_files:
                 self._log(f"Detected {len(overlapping_files)} overlapping file(s)/dir(s) that will be overwritten")
 
-        confirm_html = self._fmt_paths_html("About to execute patch", [
-            ("Output", output_dir),
-            ("Target", target_dir),
-        ])
+        md_lines = []
+        md_lines.append(f"**Output:** `{output_dir}`")
+        md_lines.append("")
+        md_lines.append(f"**Target:** `{target_dir}`")
+        md_lines.append("")
         if overlapping_files:
-            confirm_html += "<br><b>The following file(s)/dir(s) will be overwritten:</b><br><ul>"
-            for f in overlapping_files[:20]:
-                confirm_html += f"<li><code>{f}</code></li>"
+            target_full = self._expand_path(target_dir)
+            md_lines.append(f"The following **{len(overlapping_files)}** file(s)/dir(s) will be overwritten:")
+            md_lines.append("")
+            md_lines.append("| # | Path |")
+            md_lines.append("|---|------|")
+            for idx, f in enumerate(overlapping_files[:20], start=1):
+                full_path = os.path.join(target_full, f)
+                md_lines.append(f"| {idx} | `{full_path}` |")
             if len(overlapping_files) > 20:
-                confirm_html += f"<li>... and {len(overlapping_files) - 20} more</li>"
-            confirm_html += "</ul>"
-        confirm_html += "<br>Continue?"
+                md_lines.append(f"| ... | and {len(overlapping_files) - 20} more |")
+            md_lines.append("")
+        md_lines.append("Continue patching?")
+        md_text = "\n".join(md_lines)
 
-        reply = self._custom_msg_box(
-            "question", "Confirm Patch",
-            confirm_html,
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No
-        )
-        if reply != QMessageBox.Yes:
+        if not self._show_markdown_dialog("Confirm Patch", md_text):
             self._log("User cancelled patching")
             return
 
@@ -593,16 +542,34 @@ class MainWindow(QWidget):
                 self._log("User cancelled rollback")
                 return
 
-        reply = self._custom_msg_box(
-            "question", "Confirm Rollback",
-            self._fmt_paths_html("About to execute rollback", [
-                ("Backup", selected_dir),
-                ("Target", target_dir),
-            ]) + "<br>Continue?",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No
-        )
-        if reply != QMessageBox.Yes:
+        # Detect overlapping files that will be overwritten during rollback
+        overlapping_files = []
+        if not is_remote(target_dir):
+            overlapping_files = find_overlapping_paths(selected_dir, target_dir)
+            if overlapping_files:
+                self._log(f"Detected {len(overlapping_files)} overlapping file(s)/dir(s) that will be overwritten")
+
+        md_lines = []
+        md_lines.append(f"**Backup:** `{selected_dir}`")
+        md_lines.append("")
+        md_lines.append(f"**Target:** `{target_dir}`")
+        md_lines.append("")
+        if overlapping_files:
+            target_full = self._expand_path(target_dir)
+            md_lines.append(f"The following **{len(overlapping_files)}** file(s)/dir(s) will be overwritten:")
+            md_lines.append("")
+            md_lines.append("| # | Path |")
+            md_lines.append("|---|------|")
+            for idx, f in enumerate(overlapping_files[:20], start=1):
+                full_path = os.path.join(target_full, f)
+                md_lines.append(f"| {idx} | `{full_path}` |")
+            if len(overlapping_files) > 20:
+                md_lines.append(f"| ... | and {len(overlapping_files) - 20} more |")
+            md_lines.append("")
+        md_lines.append("Continue rollback?")
+        md_text = "\n".join(md_lines)
+
+        if not self._show_markdown_dialog("Confirm Rollback", md_text):
             self._log("User cancelled rollback")
             return
 

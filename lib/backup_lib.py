@@ -138,6 +138,9 @@ def check_patch_compatibility(output_dir: str, target_dir: str, logger=None):
     output_items = {name for name in os.listdir(output_dir) if not name.startswith('.')}
     target_items = {name for name in os.listdir(target_dir) if not name.startswith('.')}
 
+    if not target_items:
+        return "empty_target", {}
+
     if not output_items:
         return "match", {}
 
