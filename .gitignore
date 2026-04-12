@@ -5,7 +5,7 @@ __pycache__/
 *.so
 .Python
 config_test.json
-
+scipy-alg-backup/
 # Virtual environments
 venv/
 env/
