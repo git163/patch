@@ -166,6 +166,13 @@ class RemoteDirDialog(QDialog):
         path_layout.addWidget(self.btn_refresh)
         layout.addLayout(path_layout)
 
+        pwd_layout = QHBoxLayout()
+        pwd_layout.addWidget(QLabel("Password:"))
+        self.edit_pwd = QLineEdit(self.password)
+        self.edit_pwd.setEchoMode(QLineEdit.Password)
+        pwd_layout.addWidget(self.edit_pwd)
+        layout.addLayout(pwd_layout)
+
         self.list_widget = QListWidget()
         self.list_widget.itemDoubleClicked.connect(self._on_double_click)
         layout.addWidget(self.list_widget)
@@ -211,6 +218,7 @@ class RemoteDirDialog(QDialog):
             self.list_widget.clear()
             return
 
+        self.password = self.edit_pwd.text().strip()
         if not self.password:
             QMessageBox.warning(self, "No Password", "SSH password is required for remote browsing.")
             return
@@ -535,8 +543,37 @@ class MainWindow(QWidget):
             self._custom_msg_box("question", "Create Failed", str(e))
             return False
 
-    def _check_output_exists(self, output_dir: str) -> bool:
+    def _check_output_exists(self, output_dir: str, password: str = "") -> bool:
         """Output is a source dir; if it does not exist, show warning."""
+        if is_remote(output_dir):
+            if not password:
+                self._custom_msg_box(
+                    "question", "Path Error",
+                    "<b>Remote output directory requires SSH password</b>"
+                )
+                return False
+            try:
+                user_host, remote_dir = parse_remote(output_dir)
+                import paramiko
+                client = paramiko.SSHClient()
+                client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                username, hostname = user_host.split("@", 1)
+                client.connect(hostname=hostname, username=username, password=password, look_for_keys=False, allow_agent=False)
+                sftp = client.open_sftp()
+                try:
+                    sftp.stat(remote_dir)
+                finally:
+                    sftp.close()
+                client.close()
+                return True
+            except Exception as e:
+                self._custom_msg_box(
+                    "question", "Path Error",
+                    f"<b>Remote output directory does not exist or is unreachable</b><br><br>"
+                    f"<code style='font-size:13px;'>{output_dir}</code><br><br>{e}"
+                )
+                self._log(f"Remote output directory does not exist: {output_dir} ({e})")
+                return False
         real_path = self._expand_path(output_dir)
         if os.path.isdir(real_path):
             return True
@@ -575,16 +612,34 @@ class MainWindow(QWidget):
             self._log(f"Default config file does not exist: {path}")
 
     def _on_browse_backup(self):
-        start_dir = self.edit_backup.text().strip() or os.path.expanduser("~")
-        path = QFileDialog.getExistingDirectory(self, "Select Backup Directory", start_dir)
-        if path:
-            self.edit_backup.setText(path)
+        current = self.edit_backup.text().strip()
+        if not current or not is_remote(current):
+            start_dir = current or os.path.expanduser("~")
+            path = QFileDialog.getExistingDirectory(self, "Select Backup Directory", start_dir)
+            if path:
+                self.edit_backup.setText(path)
+        else:
+            password = self.edit_password.text().strip()
+            dialog = RemoteDirDialog(self, current or "", password or "")
+            if dialog.exec() == QDialog.Accepted:
+                self.edit_backup.setText(dialog.selected_path)
+                if dialog.password and not self.edit_password.text().strip():
+                    self.edit_password.setText(dialog.password)
 
     def _on_browse_output(self):
-        start_dir = self.edit_output.text().strip() or os.path.expanduser("~")
-        path = QFileDialog.getExistingDirectory(self, "Select Output Directory", start_dir)
-        if path:
-            self.edit_output.setText(path)
+        current = self.edit_output.text().strip()
+        if not current or not is_remote(current):
+            start_dir = current or os.path.expanduser("~")
+            path = QFileDialog.getExistingDirectory(self, "Select Output Directory", start_dir)
+            if path:
+                self.edit_output.setText(path)
+        else:
+            password = self.edit_password.text().strip()
+            dialog = RemoteDirDialog(self, current or "", password or "")
+            if dialog.exec() == QDialog.Accepted:
+                self.edit_output.setText(dialog.selected_path)
+                if dialog.password and not self.edit_password.text().strip():
+                    self.edit_password.setText(dialog.password)
 
     def _on_browse_target(self):
         current = self.edit_target.text().strip()
@@ -674,13 +729,19 @@ class MainWindow(QWidget):
         if not target_dir:
             self._custom_msg_box("question", "Input Error", "Target directory cannot be empty")
             return
-        if not self._check_output_exists(output_dir):
+        if not self._check_output_exists(output_dir, password):
+            return
+        if is_remote(output_dir) and not password:
+            self._custom_msg_box("question", "Input Error", "Remote output requires SSH password")
             return
         if is_remote(target_dir) and not password:
             self._custom_msg_box("question", "Input Error", "Remote target requires SSH password")
             return
         if is_remote(target_dir) and not backup_dir:
             self._custom_msg_box("question", "Input Error", "Remote target requires Backup directory")
+            return
+        if is_remote(backup_dir) and not password:
+            self._custom_msg_box("question", "Input Error", "Remote backup requires SSH password")
             return
         if not is_remote(target_dir):
             if not self._ensure_local_dir(target_dir, "Target"):
@@ -794,6 +855,9 @@ class MainWindow(QWidget):
         if not target_dir:
             self._custom_msg_box("question", "Input Error", "Target directory cannot be empty")
             return
+        if is_remote(backup_dir) and not password:
+            self._custom_msg_box("question", "Input Error", "Remote backup requires SSH password")
+            return
         if is_remote(target_dir) and not password:
             self._custom_msg_box("question", "Input Error", "Remote target requires SSH password")
             return
@@ -804,7 +868,11 @@ class MainWindow(QWidget):
             if not self._ensure_local_dir(target_dir, "Target"):
                 return
 
-        backups = list_backups(backup_dir)
+        try:
+            backups = list_backups(backup_dir, password=password)
+        except Exception as e:
+            self._custom_msg_box("question", "Backup Error", str(e))
+            return
         if not backups:
             self._custom_msg_box("question", "No Backups", "No timestamped backups in backup directory")
             return
@@ -817,7 +885,11 @@ class MainWindow(QWidget):
             self._log("User cancelled rollback")
             return
 
-        selected_dir = os.path.join(backup_dir, name)
+        if is_remote(backup_dir):
+            user_host, remote_dir = parse_remote(backup_dir)
+            selected_dir = f"{user_host}:{remote_dir}/{name}"
+        else:
+            selected_dir = os.path.join(backup_dir, name)
 
         self._log("Starting compatibility check...")
         self._set_busy(True)
