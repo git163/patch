@@ -1,5 +1,8 @@
 {
   "backup": "~/backup_tool/backup",
   "output": "~/backup_tool/output",
-  "target": "~/backup_tool/target"
+  "target": "~/backup_tool/target",
+  "ssh_passwords": {
+    "tshua@117.72.93.12": "tshua@132"
+  }
 }

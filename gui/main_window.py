@@ -582,13 +582,12 @@ class MainWindow(QWidget):
         self.edit_target.setText(data.get("target", ""))
 
     def _load_config(self, path: str):
+        self.password_manager.set_file_path(path)
         if os.path.exists(path):
             try:
                 with open(path, "r", encoding="utf-8") as f:
                     data = json.load(f)
                 self._set_inputs(data)
-                if isinstance(data, dict) and "ssh_passwords" in data:
-                    self.password_manager._cache = dict(data["ssh_passwords"])
                 self._log(f"Config loaded: {path}")
             except Exception as e:
                 self._log(f"Failed to load config: {e}")
@@ -643,6 +642,7 @@ class MainWindow(QWidget):
             return
         try:
             os.makedirs(os.path.dirname(path), exist_ok=True)
+            self.password_manager.set_file_path(path)
             data = dict(self._get_inputs())
             data["ssh_passwords"] = dict(self.password_manager._cache)
             with open(path, "w", encoding="utf-8") as f:
@@ -658,11 +658,10 @@ class MainWindow(QWidget):
         if not path:
             return
         try:
+            self.password_manager.set_file_path(path)
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
             self._set_inputs(data)
-            if isinstance(data, dict) and "ssh_passwords" in data:
-                self.password_manager._cache = dict(data["ssh_passwords"])
             self._log(f"Params loaded: {path}")
         except Exception as e:
             self._log(f"Failed to load params: {e}")
