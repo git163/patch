@@ -291,6 +291,29 @@ class TestLocalCompatibilityAndOverlap:
         assert not os.path.exists(os.path.join(result, "only_target.txt"))
         assert not os.path.exists(os.path.join(result, "only_output.txt"))
 
+    def test_backup_overlapping_files_keeps_bottom_most_items(self, tmp_path):
+        """When a directory and its child both overlap, backup only the child."""
+        output_dir = tmp_path / "output"
+        target_dir = tmp_path / "target"
+        backup_dir = tmp_path / "backup"
+        output_dir.mkdir()
+        target_dir.mkdir()
+
+        # output and target both have sub/a.txt
+        # target also has sub/b.txt which is NOT in output
+        _write_file(output_dir / "sub" / "a.txt", "output_a")
+        _write_file(target_dir / "sub" / "a.txt", "target_a")
+        _write_file(target_dir / "sub" / "b.txt", "target_b")
+
+        result = backup_overlapping_files(str(output_dir), str(target_dir), str(backup_dir))
+        assert result is not None
+
+        # Should back up the bottom-most overlapping item (sub/a.txt),
+        # NOT the entire sub/ directory (which would incorrectly include sub/b.txt).
+        assert os.path.isfile(os.path.join(result, "sub", "a.txt"))
+        assert _read_file(os.path.join(result, "sub", "a.txt")) == "target_a"
+        assert not os.path.exists(os.path.join(result, "sub", "b.txt"))
+
 
 # =============================================================================
 # Remote Target Tests (commands validated via mocking)

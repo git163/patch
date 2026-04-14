@@ -18,6 +18,11 @@ def _expand_path(path: str) -> str:
     return os.path.expanduser(path)
 
 
+def _ignore_hidden(dir, contents):
+    """Ignore hidden files and directories (e.g. .DS_Store)."""
+    return [name for name in contents if name.startswith('.')]
+
+
 def is_remote(path: str) -> bool:
     """Check if path is a remote path like root@192.168.1.100:/path"""
     if not path:
@@ -295,21 +300,23 @@ def _remove_if_empty(dir_path: str, logger=None) -> bool:
 
 
 def _copy_dir_local(source_dir: str, dest_dir: str, logger=None) -> bool:
-    """Local copy. If dest exists and is a directory, copy contents into it."""
+    """Local copy. If dest exists and is a directory, copy contents into it. Skips hidden files."""
     if os.path.exists(dest_dir) and os.path.isdir(dest_dir):
         # Copy contents instead of replacing the directory itself
         for item in os.listdir(source_dir):
+            if item.startswith('.'):
+                continue
             src_item = os.path.join(source_dir, item)
             dst_item = os.path.join(dest_dir, item)
             if os.path.isdir(src_item):
-                shutil.copytree(src_item, dst_item, dirs_exist_ok=True)
+                shutil.copytree(src_item, dst_item, dirs_exist_ok=True, ignore=_ignore_hidden)
             else:
                 shutil.copy2(src_item, dst_item)
         if logger:
             logger(f"Local copy completed: {source_dir} -> {dest_dir}")
         return True
     else:
-        shutil.copytree(source_dir, dest_dir, dirs_exist_ok=True)
+        shutil.copytree(source_dir, dest_dir, dirs_exist_ok=True, ignore=_ignore_hidden)
         if logger:
             logger(f"Local copy completed: {source_dir} -> {dest_dir}")
         return True
@@ -342,6 +349,8 @@ def _copy_dir_remote(source_dir: str, remote_path: str, password: str, logger=No
     ]
 
     for item in os.listdir(source_dir):
+        if item.startswith('.'):
+            continue
         src_item = os.path.join(source_dir, item)
         dest_uri = f"{user_host}:{remote_dir}/"
 
@@ -418,17 +427,10 @@ def backup(target_dir: str, backup_dir: str, password: str = "", logger=None) ->
 
     os.makedirs(backup_dir, exist_ok=True)
 
-    # Use cp -r command for logging, but fallback to shutil.copytree
-    cmd = ["cp", "-r", target_dir, dest_path]
+    # Copy target_dir to dest_path, skipping hidden files
     if logger:
-        logger(f"Executing command: {' '.join(cmd)}")
-    ret = _run_cmd(cmd, logger)
-    if ret != 0:
-        if logger:
-            logger(f"cp command failed, falling back to shutil copy...")
-        shutil.copytree(target_dir, dest_path)
-        if logger:
-            logger(f"Local copy completed: {target_dir} -> {dest_path}")
+        logger(f"Backing up {target_dir} -> {dest_path}")
+    _copy_dir_local(target_dir, dest_path, logger)
 
     if _remove_if_empty(dest_path, logger):
         return None
@@ -453,10 +455,18 @@ def find_overlapping_paths(output_dir: str, target_dir: str, password: str = "",
 
     overlaps = []
     for dirpath, dirnames, filenames in os.walk(output_dir):
+        # Filter hidden directories to prevent walking into them
+        dirnames[:] = [d for d in dirnames if not d.startswith('.')]
         rel_dir = os.path.relpath(dirpath, output_dir)
         if rel_dir == '.':
             rel_dir = ''
-        for name in dirnames + filenames:
+        for name in filenames:
+            if name.startswith('.'):
+                continue
+            rel_path = os.path.join(rel_dir, name) if rel_dir else name
+            if os.path.lexists(os.path.join(target_dir, rel_path)):
+                overlaps.append(rel_path)
+        for name in dirnames:
             rel_path = os.path.join(rel_dir, name) if rel_dir else name
             if os.path.lexists(os.path.join(target_dir, rel_path)):
                 overlaps.append(rel_path)
@@ -498,18 +508,20 @@ def backup_overlapping_files(output_dir: str, target_dir: str, backup_dir: str, 
             logger("No overlapping files to backup")
         return None
 
-    # Filter out paths whose parent directory is also in the overlap list
+    # Keep only the bottom-most overlapping items.
+    # If a directory and its child both overlap, we back up the child
+    # (file or deepest directory) instead of the parent to avoid copying
+    # non-overlapping siblings and to precisely target what will be overwritten.
     overlap_set = set(overlaps)
     filtered = []
     for p in overlaps:
-        parent = os.path.dirname(p)
-        has_parent = False
-        while parent:
-            if parent in overlap_set:
-                has_parent = True
+        is_parent = False
+        for other in overlap_set:
+            if other != p and other.startswith(p + os.sep):
+                is_parent = True
                 break
-            parent = os.path.dirname(parent)
-        if not has_parent:
+        if not is_parent:
+            logger and logger(f"Will backup overlapping item: {p}")
             filtered.append(p)
 
     basename = os.path.basename(os.path.normpath(target_dir))
@@ -525,7 +537,7 @@ def backup_overlapping_files(output_dir: str, target_dir: str, backup_dir: str, 
         if dst_parent and not os.path.exists(dst_parent):
             os.makedirs(dst_parent, exist_ok=True)
         if os.path.isdir(src):
-            shutil.copytree(src, dst, dirs_exist_ok=True)
+            shutil.copytree(src, dst, dirs_exist_ok=True, ignore=_ignore_hidden)
         else:
             shutil.copy2(src, dst)
 
@@ -550,17 +562,9 @@ def patch(output_dir: str, target_dir: str, password: str = "", logger=None) -> 
     else:
         target_dir = _expand_path(target_dir)
         os.makedirs(target_dir, exist_ok=True)
-        # For local copy, try cp -r first for logging visibility
-        # cp -r output_dir/* target_dir/  doesn't work well with hidden files
-        # Use rsync if available, otherwise cp -r then merge
-        cmd = ["cp", "-r", output_dir + "/.", target_dir]
         if logger:
-            logger(f"Executing command: cp -r {output_dir}/. {target_dir}")
-        ret = _run_cmd(["cp", "-r", output_dir + "/.", target_dir], logger)
-        if ret != 0:
-            if logger:
-                logger("cp command failed, falling back to shutil copy...")
-            _copy_dir_local(output_dir, target_dir, logger)
+            logger(f"Patching {output_dir} -> {target_dir} (ignoring hidden files)")
+        _copy_dir_local(output_dir, target_dir, logger)
         return True
 
 
@@ -576,10 +580,6 @@ def rollback(backup_timestamp_dir: str, target_dir: str, password: str = "", log
         target_dir = _expand_path(target_dir)
         os.makedirs(target_dir, exist_ok=True)
         if logger:
-            logger(f"Executing command: cp -r {backup_timestamp_dir}/. {target_dir}")
-        ret = _run_cmd(["cp", "-r", backup_timestamp_dir + "/.", target_dir], logger)
-        if ret != 0:
-            if logger:
-                logger("cp command failed, falling back to shutil copy...")
-            _copy_dir_local(backup_timestamp_dir, target_dir, logger)
+            logger(f"Rolling back {backup_timestamp_dir} -> {target_dir} (ignoring hidden files)")
+        _copy_dir_local(backup_timestamp_dir, target_dir, logger)
         return True
