@@ -25,6 +25,11 @@ class PasswordManager:
         self._cache = {}
         self.load()
 
+    def set_file_path(self, file_path: str):
+        """Switch the associated config file and reload cache from it."""
+        self._file_path = os.path.abspath(file_path)
+        self.load()
+
     def load(self):
         """Load cached passwords from disk under the 'ssh_passwords' key."""
         if os.path.exists(self._file_path):
@@ -39,6 +44,8 @@ class PasswordManager:
                     self._cache = {}
             except Exception:
                 self._cache = {}
+        else:
+            self._cache = {}
 
     def save(self):
         """Persist cached passwords to disk under the 'ssh_passwords' key without touching other keys."""

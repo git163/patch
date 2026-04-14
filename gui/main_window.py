@@ -96,11 +96,12 @@ class _PreCheckThread(QThread):
     log_msg = Signal(str)
     finished = Signal(object, object, list)
 
-    def __init__(self, source_dir: str, target_dir: str, password: str, parent=None):
+    def __init__(self, source_dir: str, target_dir: str, source_password: str = "", target_password: str = "", parent=None):
         super().__init__(parent)
         self.source_dir = source_dir
         self.target_dir = target_dir
-        self.password = password
+        self.source_password = source_password
+        self.target_password = target_password
 
     def run(self):
         try:
@@ -108,11 +109,11 @@ class _PreCheckThread(QThread):
                 self.log_msg.emit(msg)
             compat, details = check_patch_compatibility(
                 self.source_dir, self.target_dir,
-                password=self.password, logger=thread_log
+                output_password=self.source_password, target_password=self.target_password, logger=thread_log
             )
             overlaps = find_overlapping_paths(
                 self.source_dir, self.target_dir,
-                password=self.password, logger=thread_log
+                output_password=self.source_password, target_password=self.target_password, logger=thread_log
             )
             self.finished.emit(compat, details, overlaps)
         except Exception as e:
@@ -496,16 +497,13 @@ class MainWindow(QWidget):
         lines.append("</table>")
         return "\n".join(lines)
 
-    def _resolve_password(self, *paths) -> Optional[str]:
-        """Prompt for SSH password if any path is remote. Returns None if user cancels."""
-        for p in paths:
-            if is_remote(p):
-                user_host, _ = parse_remote(p)
-                pwd = self.password_manager.get_password_with_retry(user_host, self)
-                if not pwd:
-                    return None
-                return pwd
-        return ""
+    def _get_password_for_path(self, path: str) -> Optional[str]:
+        """Prompt for SSH password if path is remote. Returns empty string for local, None if user cancels."""
+        if not is_remote(path):
+            return ""
+        user_host, _ = parse_remote(path)
+        pwd = self.password_manager.get_password_with_retry(user_host, self)
+        return pwd if pwd else None
 
     def _ensure_local_dir(self, dir_path: str, name: str) -> bool:
         """If local dir does not exist, prompt yes/no to create it."""
@@ -713,9 +711,17 @@ class MainWindow(QWidget):
             return
         if not self._check_output_exists(output_dir):
             return
-        password = self._resolve_password(output_dir, target_dir, backup_dir)
-        if password is None:
+
+        output_pwd = self._get_password_for_path(output_dir)
+        if output_pwd is None:
             return
+        target_pwd = self._get_password_for_path(target_dir)
+        if target_pwd is None:
+            return
+        backup_pwd = self._get_password_for_path(backup_dir)
+        if backup_pwd is None:
+            return
+
         if is_remote(target_dir) and not backup_dir:
             self._custom_msg_box("question", "Input Error", "Remote target requires Backup directory")
             return
@@ -725,17 +731,17 @@ class MainWindow(QWidget):
 
         self._log("Starting compatibility check...")
         self._set_busy(True)
-        pre_thread = _PreCheckThread(output_dir, target_dir, password, self)
+        pre_thread = _PreCheckThread(output_dir, target_dir, output_pwd, target_pwd, self)
         pre_thread.log_msg.connect(self._log)
 
         def on_precheck_finished(compat, details, overlaps):
             self._set_busy(False)
-            self._continue_patch(output_dir, target_dir, password, backup_dir, compat, details, overlaps)
+            self._continue_patch(output_dir, target_dir, output_pwd, target_pwd, backup_pwd, backup_dir, compat, details, overlaps)
 
         pre_thread.finished.connect(on_precheck_finished)
         pre_thread.start()
 
-    def _continue_patch(self, output_dir, target_dir, password, backup_dir, compatibility, details, overlapping_files):
+    def _continue_patch(self, output_dir, target_dir, output_pwd, target_pwd, backup_pwd, backup_dir, compatibility, details, overlapping_files):
         if compatibility is None:
             self._custom_msg_box("question", "Pre-check Failed", "Failed to perform compatibility check.")
             return
@@ -808,13 +814,13 @@ class MainWindow(QWidget):
             if backup_dir:
                 backup_path = backup_overlapping_files(
                     output_dir, target_dir, backup_dir,
-                    password=password, logger=logger
+                    output_password=output_pwd, target_password=target_pwd, backup_password=backup_pwd, logger=logger
                 )
                 if backup_path:
                     logger(f"Overwrite backup completed: {backup_path}")
             else:
                 logger("Warning: Backup directory not set, skipping overwrite backup")
-            patch(output_dir, target_dir, password=password, logger=logger)
+            patch(output_dir, target_dir, output_password=output_pwd, target_password=target_pwd, logger=logger)
             logger("Patch completed")
 
         self._start_worker(patch_worker, "Patch Successful", "Patch completed")
@@ -830,9 +836,14 @@ class MainWindow(QWidget):
         if not target_dir:
             self._custom_msg_box("question", "Input Error", "Target directory cannot be empty")
             return
-        password = self._resolve_password(backup_dir, target_dir)
-        if password is None:
+
+        backup_pwd = self._get_password_for_path(backup_dir)
+        if backup_pwd is None:
             return
+        target_pwd = self._get_password_for_path(target_dir)
+        if target_pwd is None:
+            return
+
         if is_remote(target_dir) and not backup_dir:
             self._custom_msg_box("question", "Input Error", "Remote target requires Backup directory")
             return
@@ -841,7 +852,7 @@ class MainWindow(QWidget):
                 return
 
         try:
-            backups = list_backups(backup_dir, password=password)
+            backups = list_backups(backup_dir, backup_password=backup_pwd)
         except Exception as e:
             self._custom_msg_box("question", "Backup Error", str(e))
             return
@@ -865,17 +876,17 @@ class MainWindow(QWidget):
 
         self._log("Starting compatibility check...")
         self._set_busy(True)
-        pre_thread = _PreCheckThread(selected_dir, target_dir, password, self)
+        pre_thread = _PreCheckThread(selected_dir, target_dir, backup_pwd, target_pwd, self)
         pre_thread.log_msg.connect(self._log)
 
         def on_precheck_finished(compat, details, overlaps):
             self._set_busy(False)
-            self._continue_rollback(selected_dir, target_dir, password, compat, details, overlaps)
+            self._continue_rollback(selected_dir, target_dir, backup_pwd, target_pwd, compat, details, overlaps)
 
         pre_thread.finished.connect(on_precheck_finished)
         pre_thread.start()
 
-    def _continue_rollback(self, selected_dir, target_dir, password, compatibility, details, overlapping_files):
+    def _continue_rollback(self, selected_dir, target_dir, backup_pwd, target_pwd, compatibility, details, overlapping_files):
         if compatibility is None:
             self._custom_msg_box("question", "Pre-check Failed", "Failed to perform compatibility check.")
             return
@@ -945,7 +956,7 @@ class MainWindow(QWidget):
         self._log("Starting rollback...")
 
         def rollback_worker(logger):
-            rollback(selected_dir, target_dir, password=password, logger=logger)
+            rollback(selected_dir, target_dir, backup_password=backup_pwd, target_password=target_pwd, logger=logger)
             logger("Rollback completed")
 
         self._start_worker(rollback_worker, "Rollback Successful", "Rollback completed")

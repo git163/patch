@@ -42,13 +42,13 @@ def parse_remote(path: str):
     return match.group(1), match.group(2)
 
 
-def list_backups(backup_dir: str, password: str = "", logger=None) -> list:
+def list_backups(backup_dir: str, backup_password: str = "", logger=None) -> list:
     """List timestamped backup directories under backup_dir."""
     backup_dir = _expand_path(backup_dir)
     if is_remote(backup_dir):
-        if not password:
+        if not backup_password:
             raise ValueError("Remote backup listing requires SSH password")
-        return _list_remote_backups(backup_dir, password, logger)
+        return _list_remote_backups(backup_dir, backup_password, logger)
     if not os.path.isdir(backup_dir):
         return []
     dirs = []
@@ -77,7 +77,7 @@ def _list_visible(root: str) -> list:
     return sorted(items)
 
 
-def check_patch_compatibility(output_dir: str, target_dir: str, password: str = "", logger=None):
+def check_patch_compatibility(output_dir: str, target_dir: str, output_password: str = "", target_password: str = "", logger=None):
     """
     Check compatibility between output_dir and target_dir for patching.
 
@@ -98,9 +98,9 @@ def check_patch_compatibility(output_dir: str, target_dir: str, password: str = 
     output_remote = is_remote(output_dir)
     target_remote = is_remote(target_dir)
 
-    if output_remote and not password:
+    if output_remote and not output_password:
         raise ValueError("Remote output compatibility check requires SSH password")
-    if target_remote and not password:
+    if target_remote and not target_password:
         raise ValueError("Remote target compatibility check requires SSH password")
 
     if output_remote and logger:
@@ -109,14 +109,14 @@ def check_patch_compatibility(output_dir: str, target_dir: str, password: str = 
         logger(f"Remote target, performing compatibility check: {target_dir}")
 
     try:
-        output_items = _get_toplevel_items(output_dir, password, logger)
+        output_items = _get_toplevel_items(output_dir, output_password, logger)
     except Exception as e:
         if logger:
             logger(f"Failed to list output items: {e}")
         raise
 
     try:
-        target_items = _get_toplevel_items(target_dir, password, logger)
+        target_items = _get_toplevel_items(target_dir, target_password, logger)
     except Exception as e:
         if logger:
             logger(f"Failed to list target items: {e}")
@@ -142,8 +142,8 @@ def check_patch_compatibility(output_dir: str, target_dir: str, password: str = 
     for name in sorted(overlap):
         out_path = _join_remote(output_dir, name) if output_remote else os.path.join(output_dir, name)
         tgt_path = _join_remote(target_dir, name) if target_remote else os.path.join(target_dir, name)
-        out_is_dir = _is_dir_path(out_path, password, logger)
-        tgt_is_dir = _is_dir_path(tgt_path, password, logger)
+        out_is_dir = _is_dir_path(out_path, output_password, logger)
+        tgt_is_dir = _is_dir_path(tgt_path, target_password, logger)
         if out_is_dir != tgt_is_dir:
             mismatch.append(name)
             mismatch_info.append({
@@ -293,12 +293,12 @@ def _copy_dir_remote_to_local(remote_path: str, local_dir: str, password: str, l
     return True
 
 
-def _copy_dir_remote_to_remote(source_remote: str, dest_remote: str, password: str, logger=None) -> bool:
+def _copy_dir_remote_to_remote(source_remote: str, dest_remote: str, source_password: str = "", dest_password: str = "", logger=None) -> bool:
     """Copy directory from remote to remote via local temp."""
     import tempfile
     with tempfile.TemporaryDirectory() as tmpdir:
-        _copy_dir_remote_to_local(source_remote, tmpdir, password, logger)
-        _copy_dir_remote(tmpdir, dest_remote, password, logger)
+        _copy_dir_remote_to_local(source_remote, tmpdir, source_password, logger)
+        _copy_dir_remote(tmpdir, dest_remote, dest_password, logger)
     if logger:
         logger(f"Remote-to-remote copy completed: {source_remote} -> {dest_remote}")
     return True
@@ -319,7 +319,7 @@ def _backup_to_remote(target_dir: str, remote_path: str, password: str, logger=N
     return dest_remote
 
 
-def _backup_remote_to_remote(target_dir: str, remote_path: str, password: str, logger=None) -> Optional[str]:
+def _backup_remote_to_remote(target_dir: str, remote_path: str, target_password: str = "", backup_password: str = "", logger=None) -> Optional[str]:
     """Backup a remote directory to another remote backup directory."""
     target_user_host, target_remote_dir = parse_remote(target_dir)
     backup_user_host, backup_remote_dir = parse_remote(remote_path)
@@ -328,7 +328,7 @@ def _backup_remote_to_remote(target_dir: str, remote_path: str, password: str, l
     dest_name = f"{basename}_{target_user_host}_{timestamp}"
     dest_remote = f"{backup_user_host}:{backup_remote_dir}/{dest_name}"
 
-    _copy_dir_remote_to_remote(target_dir, dest_remote, password, logger)
+    _copy_dir_remote_to_remote(target_dir, dest_remote, target_password, backup_password, logger)
 
     if logger:
         logger(f"Remote-to-remote backup completed: {target_dir} -> {dest_remote}")
@@ -483,27 +483,27 @@ def _backup_from_remote(remote_path: str, backup_dir: str, password: str, logger
     return dest_path
 
 
-def backup(target_dir: str, backup_dir: str, password: str = "", logger=None) -> Optional[str]:
+def backup(target_dir: str, backup_dir: str, target_password: str = "", backup_password: str = "", logger=None) -> Optional[str]:
     """Backup target_dir into backup_dir/target_basename_YYYYMMDD_HHMMSS/."""
     target_remote = is_remote(target_dir)
     backup_remote = is_remote(backup_dir)
 
-    if target_remote and not password:
+    if target_remote and not target_password:
         raise ValueError("Remote target backup requires SSH password")
-    if backup_remote and not password:
+    if backup_remote and not backup_password:
         raise ValueError("Remote backup directory requires SSH password")
 
     if target_remote and not backup_remote:
-        return _backup_from_remote(target_dir, _expand_path(backup_dir), password, logger)
+        return _backup_from_remote(target_dir, _expand_path(backup_dir), target_password, logger)
 
     if not target_remote and backup_remote:
         target_dir = _expand_path(target_dir)
         if not os.path.isdir(target_dir):
             raise ValueError(f"Target directory does not exist: {target_dir}")
-        return _backup_to_remote(target_dir, backup_dir, password, logger)
+        return _backup_to_remote(target_dir, backup_dir, backup_password, logger)
 
     if target_remote and backup_remote:
-        return _backup_remote_to_remote(target_dir, backup_dir, password, logger)
+        return _backup_remote_to_remote(target_dir, backup_dir, target_password, backup_password, logger)
 
     # Both local
     target_dir = _expand_path(target_dir)
@@ -528,20 +528,20 @@ def backup(target_dir: str, backup_dir: str, password: str = "", logger=None) ->
     return dest_path
 
 
-def find_overlapping_paths(output_dir: str, target_dir: str, password: str = "", logger=None) -> list:
+def find_overlapping_paths(output_dir: str, target_dir: str, output_password: str = "", target_password: str = "", logger=None) -> list:
     """Return sorted list of relative paths that exist in both output and target."""
     output_dir = _expand_path(output_dir)
     output_remote = is_remote(output_dir)
     target_remote = is_remote(target_dir)
 
-    if output_remote and not password:
+    if output_remote and not output_password:
         raise ValueError("Remote output overlap detection requires SSH password")
-    if target_remote and not password:
+    if target_remote and not target_password:
         raise ValueError("Remote target overlap detection requires SSH password")
 
     if output_remote or target_remote:
-        output_items = _list_remote_paths(output_dir, password, logger) if output_remote else _list_visible(output_dir)
-        target_items = _list_remote_paths(target_dir, password, logger) if target_remote else _list_visible(target_dir)
+        output_items = _list_remote_paths(output_dir, output_password, logger) if output_remote else _list_visible(output_dir)
+        target_items = _list_remote_paths(target_dir, target_password, logger) if target_remote else _list_visible(target_dir)
         overlap_set = set(output_items) & set(target_items)
         return sorted(overlap_set)
 
@@ -569,7 +569,7 @@ def find_overlapping_paths(output_dir: str, target_dir: str, password: str = "",
     return sorted(overlaps)
 
 
-def backup_overlapping_files(output_dir: str, target_dir: str, backup_dir: str, password: str = "", logger=None):
+def backup_overlapping_files(output_dir: str, target_dir: str, backup_dir: str, output_password: str = "", target_password: str = "", backup_password: str = "", logger=None):
     """
     Backup files in target_dir that would be overwritten by output_dir.
 
@@ -582,23 +582,23 @@ def backup_overlapping_files(output_dir: str, target_dir: str, backup_dir: str, 
     backup_remote = is_remote(backup_dir)
 
     if is_remote(target_dir):
-        if not password:
+        if not target_password:
             raise ValueError("Remote target backup requires SSH password")
         if logger:
             logger("Remote target: performing full backup before patch")
         user_host, remote_dir = parse_remote(target_dir)
-        ret, _ = _run_ssh_cmd(user_host, password, f"test -d {shlex.quote(remote_dir)}")
+        ret, _ = _run_ssh_cmd(user_host, target_password, f"test -d {shlex.quote(remote_dir)}")
         if ret != 0:
             if logger:
                 logger(f"Remote target directory does not exist, skipping backup: {target_dir}")
             return None
-        return backup(target_dir, backup_dir, password=password, logger=logger)
+        return backup(target_dir, backup_dir, target_password=target_password, backup_password=backup_password, logger=logger)
 
     target_dir = _expand_path(target_dir)
     if not os.path.isdir(target_dir) or not os.path.isdir(output_dir):
         return None
 
-    overlaps = find_overlapping_paths(output_dir, target_dir)
+    overlaps = find_overlapping_paths(output_dir, target_dir, output_password=output_password, target_password=target_password)
     if not overlaps:
         if logger:
             logger("No overlapping files to backup")
@@ -624,7 +624,7 @@ def backup_overlapping_files(output_dir: str, target_dir: str, backup_dir: str, 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     dest_name = f"{basename}_overwrite_{timestamp}"
     if backup_remote:
-        if not password:
+        if not backup_password:
             raise ValueError("Remote backup directory requires SSH password")
         dest_path = os.path.join(tempfile.mkdtemp(), dest_name)
     else:
@@ -651,7 +651,7 @@ def backup_overlapping_files(output_dir: str, target_dir: str, backup_dir: str, 
 
     if backup_remote:
         remote_dest = f"{parse_remote(backup_dir)[0]}:{parse_remote(backup_dir)[1]}/{dest_name}"
-        _copy_dir_remote(dest_path, remote_dest, password, logger)
+        _copy_dir_remote(dest_path, remote_dest, backup_password, logger)
         shutil.rmtree(os.path.dirname(dest_path))
         if logger:
             logger(f"Backed up {len(filtered)} overlapping item(s) to {remote_dest}")
@@ -662,31 +662,31 @@ def backup_overlapping_files(output_dir: str, target_dir: str, backup_dir: str, 
     return dest_path
 
 
-def patch(output_dir: str, target_dir: str, password: str = "", logger=None) -> bool:
+def patch(output_dir: str, target_dir: str, output_password: str = "", target_password: str = "", logger=None) -> bool:
     """Patch: copy output_dir into target_dir."""
     output_dir = _expand_path(output_dir)
     output_remote = is_remote(output_dir)
     target_remote = is_remote(target_dir)
 
-    if output_remote and not password:
+    if output_remote and not output_password:
         raise ValueError("Remote output patch requires SSH password")
-    if target_remote and not password:
+    if target_remote and not target_password:
         raise ValueError("Remote target patch requires SSH password")
 
     if output_remote and target_remote:
-        _copy_dir_remote_to_remote(output_dir, target_dir, password, logger)
+        _copy_dir_remote_to_remote(output_dir, target_dir, output_password, target_password, logger)
         return True
     elif output_remote and not target_remote:
         target_dir = _expand_path(target_dir)
         os.makedirs(target_dir, exist_ok=True)
         if logger:
             logger(f"Patching remote {output_dir} -> {target_dir} (ignoring hidden files)")
-        _copy_dir_remote_to_local(output_dir, target_dir, password, logger)
+        _copy_dir_remote_to_local(output_dir, target_dir, output_password, logger)
         return True
     elif not output_remote and target_remote:
         if not os.path.isdir(output_dir):
             raise ValueError(f"Output directory does not exist: {output_dir}")
-        return _copy_dir_remote(output_dir, target_dir, password, logger)
+        return _copy_dir_remote(output_dir, target_dir, target_password, logger)
     else:
         if not os.path.isdir(output_dir):
             raise ValueError(f"Output directory does not exist: {output_dir}")
@@ -698,15 +698,34 @@ def patch(output_dir: str, target_dir: str, password: str = "", logger=None) -> 
         return True
 
 
-def rollback(backup_timestamp_dir: str, target_dir: str, password: str = "", logger=None) -> bool:
+def rollback(backup_timestamp_dir: str, target_dir: str, backup_password: str = "", target_password: str = "", logger=None) -> bool:
     """Rollback: copy backup_timestamp_dir into target_dir."""
     backup_timestamp_dir = _expand_path(backup_timestamp_dir)
-    if not os.path.isdir(backup_timestamp_dir):
-        raise ValueError(f"Backup directory does not exist: {backup_timestamp_dir}")
+    backup_remote = is_remote(backup_timestamp_dir)
+    target_remote = is_remote(target_dir)
 
-    if is_remote(target_dir):
-        return _copy_dir_remote(backup_timestamp_dir, target_dir, password, logger)
+    if backup_remote and not backup_password:
+        raise ValueError("Remote backup rollback requires SSH password")
+    if target_remote and not target_password:
+        raise ValueError("Remote target rollback requires SSH password")
+
+    if backup_remote and target_remote:
+        _copy_dir_remote_to_remote(backup_timestamp_dir, target_dir, backup_password, target_password, logger)
+        return True
+    elif backup_remote and not target_remote:
+        target_dir = _expand_path(target_dir)
+        os.makedirs(target_dir, exist_ok=True)
+        if logger:
+            logger(f"Rolling back remote {backup_timestamp_dir} -> {target_dir} (ignoring hidden files)")
+        _copy_dir_remote_to_local(backup_timestamp_dir, target_dir, backup_password, logger)
+        return True
+    elif not backup_remote and target_remote:
+        if not os.path.isdir(backup_timestamp_dir):
+            raise ValueError(f"Backup directory does not exist: {backup_timestamp_dir}")
+        return _copy_dir_remote(backup_timestamp_dir, target_dir, target_password, logger)
     else:
+        if not os.path.isdir(backup_timestamp_dir):
+            raise ValueError(f"Backup directory does not exist: {backup_timestamp_dir}")
         target_dir = _expand_path(target_dir)
         os.makedirs(target_dir, exist_ok=True)
         if logger:

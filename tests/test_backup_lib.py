@@ -415,7 +415,7 @@ class TestRemotePatch:
         _write_file(output_dir / "sub" / "b.txt", "b")
 
         remote_target = "user@192.168.1.100:/remote/target"
-        patch(str(output_dir), remote_target, password="secret")
+        patch(str(output_dir), remote_target, target_password="secret")
 
         exec_cmds = fake_client.exec_calls
         assert any("mkdir -p" in c for c in exec_cmds)
@@ -429,7 +429,7 @@ class TestRemotePatch:
         _write_file(output_dir / "file.txt", "f")
 
         remote_target = "user@192.168.1.100:/remote/target"
-        patch(str(output_dir), remote_target, password="secret")
+        patch(str(output_dir), remote_target, target_password="secret")
 
         assert any("mkdir -p" in c for c in fake_client.exec_calls)
         assert any("/remote/target" in c for c in fake_client.exec_calls)
@@ -446,7 +446,7 @@ class TestRemoteRollback:
         _write_file(backup_dir / "sub" / "b.txt", "b")
 
         remote_target = "user@192.168.1.100:/remote/target"
-        rollback(str(backup_dir), remote_target, password="secret")
+        rollback(str(backup_dir), remote_target, target_password="secret")
 
         assert sum("rm -rf" in c for c in fake_client.exec_calls) == 2
         assert len(fake_sftp.put_calls) == 2  # a.txt and sub dir tree
@@ -462,7 +462,7 @@ class TestRemoteBackup:
         backup_base.mkdir()
 
         remote_target = "user@192.168.1.100:/remote/target"
-        result = backup(remote_target, str(backup_base), password="secret")
+        result = backup(remote_target, str(backup_base), target_password="secret")
 
         assert "/remote/target" in fake_sftp.listdir_attr_calls
         assert len(fake_sftp.get_calls) == 1
@@ -485,7 +485,7 @@ class TestRemoteCompatibilityAndOverlap:
         _write_file(os.path.join(output_dir, "a.txt"), "a")
 
         remote_target = "user@192.168.1.100:/remote/target"
-        result, details = check_patch_compatibility(output_dir, remote_target, password="secret")
+        result, details = check_patch_compatibility(output_dir, remote_target, target_password="secret")
 
         assert result == "match"
         assert mock_ssh.called
@@ -506,7 +506,7 @@ class TestRemoteCompatibilityAndOverlap:
         _write_file(os.path.join(output_dir, "c.txt"), "c")
 
         remote_target = "user@192.168.1.100:/remote/target"
-        result, details = check_patch_compatibility(output_dir, remote_target, password="secret")
+        result, details = check_patch_compatibility(output_dir, remote_target, target_password="secret")
 
         assert result == "partial"
         assert "only_output" in details
@@ -523,7 +523,7 @@ class TestRemoteCompatibilityAndOverlap:
         _write_file(os.path.join(output_dir, "c.txt"), "c")
 
         remote_target = "user@192.168.1.100:/remote/target"
-        overlaps = find_overlapping_paths(output_dir, remote_target, password="secret")
+        overlaps = find_overlapping_paths(output_dir, remote_target, target_password="secret")
 
         assert "a.txt" in overlaps
         assert "sub/b.txt" in overlaps
@@ -544,7 +544,7 @@ class TestRemoteCompatibilityAndOverlap:
         _write_file(output_dir / "a.txt", "a")
 
         remote_target = "user@192.168.1.100:/remote/target"
-        result = backup_overlapping_files(str(output_dir), remote_target, str(backup_dir), password="secret")
+        result = backup_overlapping_files(str(output_dir), remote_target, str(backup_dir), target_password="secret")
 
         # Remote target should trigger a full backup via SFTP
         assert result is not None
