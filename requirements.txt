@@ -1,1 +1,2 @@
-paramiko>=3.0
+# Dependencies are bundled in the vendor/ directory.
+# To refresh: pip install paramiko --target vendor
