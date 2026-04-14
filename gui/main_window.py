@@ -906,7 +906,7 @@ def main():
     app = QApplication(sys.argv)
     win = MainWindow()
     win.show()
-    sys.exit(app.exec() if hasattr(app, "exec") else app.exec())
+    sys.exit(app.exec() if hasattr(app, "exec") else app.exec_())
 
 
 if __name__ == "__main__":
