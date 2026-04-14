@@ -5,6 +5,7 @@ import json
 import os
 import shlex
 import sys
+from typing import Optional
 
 # Add project root to sys.path so lib can be imported
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -38,6 +39,7 @@ from lib.backup_lib import (
     is_remote, parse_remote, check_patch_compatibility,
     find_overlapping_paths, backup_overlapping_files,
 )
+from lib.password_manager import PasswordManager
 
 
 DEFAULT_CONFIG_PATH = os.path.join(
@@ -141,9 +143,10 @@ class _WorkerThread(QThread):
 class RemoteDirDialog(QDialog):
     """Simple remote directory browser via paramiko."""
 
-    def __init__(self, parent, initial_path: str, password: str):
+    def __init__(self, parent, initial_path: str, password_manager: PasswordManager):
         super().__init__(parent)
-        self.password = password
+        self.password_manager = password_manager
+        self.current_password = ""
         self.selected_path = initial_path
         self._thread = None
         self._build_ui(initial_path)
@@ -165,13 +168,6 @@ class RemoteDirDialog(QDialog):
         path_layout.addWidget(self.btn_up)
         path_layout.addWidget(self.btn_refresh)
         layout.addLayout(path_layout)
-
-        pwd_layout = QHBoxLayout()
-        pwd_layout.addWidget(QLabel("Password:"))
-        self.edit_pwd = QLineEdit(self.password)
-        self.edit_pwd.setEchoMode(QLineEdit.Password)
-        pwd_layout.addWidget(self.edit_pwd)
-        layout.addLayout(pwd_layout)
 
         self.list_widget = QListWidget()
         self.list_widget.itemDoubleClicked.connect(self._on_double_click)
@@ -218,14 +214,14 @@ class RemoteDirDialog(QDialog):
             self.list_widget.clear()
             return
 
-        self.password = self.edit_pwd.text().strip()
-        if not self.password:
-            QMessageBox.warning(self, "No Password", "SSH password is required for remote browsing.")
+        password = self.password_manager.get_password_with_retry(user_host, self)
+        if not password:
             return
+        self.current_password = password
 
         self._set_loading(True)
         self.list_widget.clear()
-        self._thread = _ListRemoteThread(self.password, user_host, remote_dir, self)
+        self._thread = _ListRemoteThread(self.current_password, user_host, remote_dir, self)
         self._thread.finished.connect(self._on_refresh_finished)
         self._thread.start()
 
@@ -270,8 +266,8 @@ class RemoteDirDialog(QDialog):
         super().reject()
 
     @staticmethod
-    def get_selected_path(parent, initial_path: str, password: str) -> str:
-        dialog = RemoteDirDialog(parent, initial_path or "", password or "")
+    def get_selected_path(parent, initial_path: str, password_manager: PasswordManager) -> str:
+        dialog = RemoteDirDialog(parent, initial_path or "", password_manager)
         if dialog.exec() == QDialog.Accepted:
             return dialog.selected_path
         return initial_path
@@ -283,6 +279,7 @@ class MainWindow(QWidget):
         self.setWindowTitle("Auto Backup and Patch Tool")
         self.resize(700, 600)
         self._worker = None
+        self.password_manager = PasswordManager()
         self._build_ui()
         self._load_config(DEFAULT_CONFIG_PATH)
 
@@ -336,17 +333,6 @@ class MainWindow(QWidget):
         self.btn_browse_target.clicked.connect(self._on_browse_target)
         target_layout.addWidget(self.btn_browse_target)
         layout.addLayout(target_layout)
-
-        layout.addWidget(QLabel("SSH Password (only for remote):"))
-        pwd_layout = QHBoxLayout()
-        self.edit_password = QLineEdit()
-        self.edit_password.setEchoMode(QLineEdit.Password)
-        self.btn_toggle_pwd = QPushButton("Show")
-        self.btn_toggle_pwd.setFixedWidth(50)
-        self.btn_toggle_pwd.clicked.connect(self._on_toggle_password)
-        pwd_layout.addWidget(self.edit_password)
-        pwd_layout.addWidget(self.btn_toggle_pwd)
-        layout.addLayout(pwd_layout)
 
         # Action buttons
         action_layout = QHBoxLayout()
@@ -493,14 +479,6 @@ class MainWindow(QWidget):
         html_lines.append("</body></html>")
         return "\n".join(html_lines)
 
-    def _on_toggle_password(self):
-        if self.edit_password.echoMode() == QLineEdit.Password:
-            self.edit_password.setEchoMode(QLineEdit.Normal)
-            self.btn_toggle_pwd.setText("Hide")
-        else:
-            self.edit_password.setEchoMode(QLineEdit.Password)
-            self.btn_toggle_pwd.setText("Show")
-
     def _expand_path(self, path: str) -> str:
         if not path or is_remote(path):
             return path
@@ -517,6 +495,17 @@ class MainWindow(QWidget):
             )
         lines.append("</table>")
         return "\n".join(lines)
+
+    def _resolve_password(self, *paths) -> Optional[str]:
+        """Prompt for SSH password if any path is remote. Returns None if user cancels."""
+        for p in paths:
+            if is_remote(p):
+                user_host, _ = parse_remote(p)
+                pwd = self.password_manager.get_password_with_retry(user_host, self)
+                if not pwd:
+                    return None
+                return pwd
+        return ""
 
     def _ensure_local_dir(self, dir_path: str, name: str) -> bool:
         """If local dir does not exist, prompt yes/no to create it."""
@@ -543,17 +532,14 @@ class MainWindow(QWidget):
             self._custom_msg_box("question", "Create Failed", str(e))
             return False
 
-    def _check_output_exists(self, output_dir: str, password: str = "") -> bool:
+    def _check_output_exists(self, output_dir: str) -> bool:
         """Output is a source dir; if it does not exist, show warning."""
         if is_remote(output_dir):
-            if not password:
-                self._custom_msg_box(
-                    "question", "Path Error",
-                    "<b>Remote output directory requires SSH password</b>"
-                )
-                return False
             try:
                 user_host, remote_dir = parse_remote(output_dir)
+                password = self.password_manager.get_password_with_retry(user_host, self)
+                if not password:
+                    return False
                 import paramiko
                 client = paramiko.SSHClient()
                 client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
@@ -590,14 +576,12 @@ class MainWindow(QWidget):
             "backup": self.edit_backup.text().strip(),
             "output": self.edit_output.text().strip(),
             "target": self.edit_target.text().strip(),
-            "ssh_password": self.edit_password.text().strip(),
         }
 
     def _set_inputs(self, data: dict):
         self.edit_backup.setText(data.get("backup", ""))
         self.edit_output.setText(data.get("output", ""))
         self.edit_target.setText(data.get("target", ""))
-        self.edit_password.setText(data.get("ssh_password", ""))
 
     def _load_config(self, path: str):
         if os.path.exists(path):
@@ -619,12 +603,9 @@ class MainWindow(QWidget):
             if path:
                 self.edit_backup.setText(path)
         else:
-            password = self.edit_password.text().strip()
-            dialog = RemoteDirDialog(self, current or "", password or "")
-            if dialog.exec() == QDialog.Accepted:
-                self.edit_backup.setText(dialog.selected_path)
-                if dialog.password and not self.edit_password.text().strip():
-                    self.edit_password.setText(dialog.password)
+            new_path = RemoteDirDialog.get_selected_path(self, current, self.password_manager)
+            if new_path:
+                self.edit_backup.setText(new_path)
 
     def _on_browse_output(self):
         current = self.edit_output.text().strip()
@@ -634,12 +615,9 @@ class MainWindow(QWidget):
             if path:
                 self.edit_output.setText(path)
         else:
-            password = self.edit_password.text().strip()
-            dialog = RemoteDirDialog(self, current or "", password or "")
-            if dialog.exec() == QDialog.Accepted:
-                self.edit_output.setText(dialog.selected_path)
-                if dialog.password and not self.edit_password.text().strip():
-                    self.edit_password.setText(dialog.password)
+            new_path = RemoteDirDialog.get_selected_path(self, current, self.password_manager)
+            if new_path:
+                self.edit_output.setText(new_path)
 
     def _on_browse_target(self):
         current = self.edit_target.text().strip()
@@ -649,8 +627,7 @@ class MainWindow(QWidget):
             if path:
                 self.edit_target.setText(path)
         else:
-            password = self.edit_password.text().strip()
-            new_path = RemoteDirDialog.get_selected_path(self, current, password)
+            new_path = RemoteDirDialog.get_selected_path(self, current, self.password_manager)
             if new_path:
                 self.edit_target.setText(new_path)
 
@@ -720,7 +697,6 @@ class MainWindow(QWidget):
         data = self._get_inputs()
         output_dir = data["output"]
         target_dir = data["target"]
-        password = data["ssh_password"]
         backup_dir = data["backup"]
 
         if not output_dir:
@@ -729,19 +705,13 @@ class MainWindow(QWidget):
         if not target_dir:
             self._custom_msg_box("question", "Input Error", "Target directory cannot be empty")
             return
-        if not self._check_output_exists(output_dir, password):
+        if not self._check_output_exists(output_dir):
             return
-        if is_remote(output_dir) and not password:
-            self._custom_msg_box("question", "Input Error", "Remote output requires SSH password")
-            return
-        if is_remote(target_dir) and not password:
-            self._custom_msg_box("question", "Input Error", "Remote target requires SSH password")
+        password = self._resolve_password(output_dir, target_dir, backup_dir)
+        if password is None:
             return
         if is_remote(target_dir) and not backup_dir:
             self._custom_msg_box("question", "Input Error", "Remote target requires Backup directory")
-            return
-        if is_remote(backup_dir) and not password:
-            self._custom_msg_box("question", "Input Error", "Remote backup requires SSH password")
             return
         if not is_remote(target_dir):
             if not self._ensure_local_dir(target_dir, "Target"):
@@ -847,7 +817,6 @@ class MainWindow(QWidget):
         data = self._get_inputs()
         backup_dir = data["backup"]
         target_dir = data["target"]
-        password = data["ssh_password"]
 
         if not backup_dir:
             self._custom_msg_box("question", "Input Error", "Backup directory cannot be empty")
@@ -855,11 +824,8 @@ class MainWindow(QWidget):
         if not target_dir:
             self._custom_msg_box("question", "Input Error", "Target directory cannot be empty")
             return
-        if is_remote(backup_dir) and not password:
-            self._custom_msg_box("question", "Input Error", "Remote backup requires SSH password")
-            return
-        if is_remote(target_dir) and not password:
-            self._custom_msg_box("question", "Input Error", "Remote target requires SSH password")
+        password = self._resolve_password(backup_dir, target_dir)
+        if password is None:
             return
         if is_remote(target_dir) and not backup_dir:
             self._custom_msg_box("question", "Input Error", "Remote target requires Backup directory")
