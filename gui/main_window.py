@@ -589,6 +589,8 @@ class MainWindow(QWidget):
                 with open(path, "r", encoding="utf-8") as f:
                     data = json.load(f)
                 self._set_inputs(data)
+                if isinstance(data, dict) and "ssh_passwords" in data:
+                    self.password_manager._cache = dict(data["ssh_passwords"])
                 self._log(f"Config loaded: {path}")
             except Exception as e:
                 self._log(f"Failed to load config: {e}")
@@ -643,8 +645,10 @@ class MainWindow(QWidget):
             return
         try:
             os.makedirs(os.path.dirname(path), exist_ok=True)
+            data = dict(self._get_inputs())
+            data["ssh_passwords"] = dict(self.password_manager._cache)
             with open(path, "w", encoding="utf-8") as f:
-                json.dump(self._get_inputs(), f, ensure_ascii=False, indent=2)
+                json.dump(data, f, ensure_ascii=False, indent=2)
             self._log(f"Params saved: {path}")
         except Exception as e:
             self._log(f"Failed to save params: {e}")
@@ -659,6 +663,8 @@ class MainWindow(QWidget):
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
             self._set_inputs(data)
+            if isinstance(data, dict) and "ssh_passwords" in data:
+                self.password_manager._cache = dict(data["ssh_passwords"])
             self._log(f"Params loaded: {path}")
         except Exception as e:
             self._log(f"Failed to load params: {e}")

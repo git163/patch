@@ -13,7 +13,7 @@ import paramiko
 
 
 DEFAULT_PASSWORD_FILE = os.path.join(
-    os.path.dirname(__file__), "..", "conf", "ssh_passwords.json"
+    os.path.dirname(__file__), "..", "conf", "config.json"
 )
 
 
@@ -26,21 +26,35 @@ class PasswordManager:
         self.load()
 
     def load(self):
-        """Load cached passwords from disk."""
+        """Load cached passwords from disk under the 'ssh_passwords' key."""
         if os.path.exists(self._file_path):
             try:
                 with open(self._file_path, "r", encoding="utf-8") as f:
-                    self._cache = json.load(f)
-                if not isinstance(self._cache, dict):
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    self._cache = data.get("ssh_passwords", {})
+                    if not isinstance(self._cache, dict):
+                        self._cache = {}
+                else:
                     self._cache = {}
             except Exception:
                 self._cache = {}
 
     def save(self):
-        """Persist cached passwords to disk."""
+        """Persist cached passwords to disk under the 'ssh_passwords' key without touching other keys."""
         os.makedirs(os.path.dirname(self._file_path), exist_ok=True)
+        data = {}
+        if os.path.exists(self._file_path):
+            try:
+                with open(self._file_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if not isinstance(data, dict):
+                    data = {}
+            except Exception:
+                data = {}
+        data["ssh_passwords"] = self._cache
         with open(self._file_path, "w", encoding="utf-8") as f:
-            json.dump(self._cache, f, ensure_ascii=False, indent=2)
+            json.dump(data, f, ensure_ascii=False, indent=2)
 
     def get_password(self, user_host: str, parent=None) -> str:
         """Return cached password or prompt user via QInputDialog."""
