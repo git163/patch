@@ -5,10 +5,12 @@ Core library for backup, patch, and rollback operations.
 import os
 import shutil
 import re
-import subprocess
+import stat
 import shlex
 from datetime import datetime
 from typing import Optional
+
+import paramiko
 
 
 def _expand_path(path: str) -> str:
@@ -209,53 +211,41 @@ def check_patch_compatibility(output_dir: str, target_dir: str, password: str = 
     return "match", details
 
 
-def _run_cmd(cmd: list, logger=None) -> int:
-    """Run a shell command and stream output to logger."""
-    if logger:
-        logger(f"Executing command: {' '.join(cmd)}")
-    try:
-        proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-        )
-        for line in proc.stdout:
-            line = line.rstrip()
-            if logger:
-                logger(line)
-        proc.wait()
-        return proc.returncode
-    except Exception as e:
-        if logger:
-            logger(f"Command execution failed: {e}")
-        return -1
+def _ssh_connect(user_host: str, password: str) -> paramiko.SSHClient:
+    """Create and connect a paramiko SSHClient."""
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    if '@' in user_host:
+        username, hostname = user_host.split('@', 1)
+    else:
+        username = None
+        hostname = user_host
+    client.connect(
+        hostname=hostname,
+        username=username,
+        password=password,
+        look_for_keys=False,
+        allow_agent=False,
+    )
+    return client
 
 
 def _run_ssh_cmd(user_host: str, password: str, remote_cmd: str, logger=None):
-    """Run a remote command via sshpass/ssh and return (returncode, stdout_lines)."""
-    cmd = [
-        "sshpass", "-p", password,
-        "ssh", "-o", "StrictHostKeyChecking=no",
-        "-o", "UserKnownHostsFile=/dev/null",
-        user_host, remote_cmd
-    ]
+    """Run a remote command via paramiko and return (returncode, stdout_lines)."""
     if logger:
         logger(f"Executing ssh command on {user_host}: {remote_cmd}")
     try:
-        proc = subprocess.run(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-        )
-        if proc.returncode != 0 and logger:
-            logger(f"SSH stderr: {proc.stderr.strip()}")
-        return proc.returncode, proc.stdout.splitlines()
+        client = _ssh_connect(user_host, password)
+        try:
+            _stdin, stdout, stderr = client.exec_command(remote_cmd)
+            exit_status = stdout.channel.recv_exit_status()
+            out_lines = stdout.read().decode("utf-8", errors="replace").splitlines()
+            err_text = stderr.read().decode("utf-8", errors="replace").strip()
+            if exit_status != 0 and logger and err_text:
+                logger(f"SSH stderr: {err_text}")
+            return exit_status, out_lines
+        finally:
+            client.close()
     except Exception as e:
         if logger:
             logger(f"SSH command execution failed: {e}")
@@ -322,65 +312,89 @@ def _copy_dir_local(source_dir: str, dest_dir: str, logger=None) -> bool:
         return True
 
 
-def _copy_dir_remote(source_dir: str, remote_path: str, password: str, logger=None) -> bool:
-    """Copy directory to remote via scp using sshpass."""
-    user_host, remote_dir = parse_remote(remote_path)
-
-    # Ensure remote parent directory exists
-    mkdir_cmd = [
-        "sshpass", "-p", password,
-        "ssh", "-o", "StrictHostKeyChecking=no",
-        "-o", "UserKnownHostsFile=/dev/null",
-        user_host, f"mkdir -p {shlex.quote(remote_dir)}"
-    ]
-    if logger:
-        logger(f"Executing command: {' '.join(mkdir_cmd[:2])} *** {' '.join(mkdir_cmd[3:])}")
-    ret = _run_cmd(mkdir_cmd, logger)
-    if ret != 0:
-        if logger:
-            logger("Remote directory creation failed, continuing with copy attempt...")
-
-    # scp -r source_dir/* user@host:/remote_dir/
-    # Build file list inside source_dir and scp each to remote
-    cmd_base = [
-        "sshpass", "-p", password,
-        "scp", "-r", "-o", "StrictHostKeyChecking=no",
-        "-o", "UserKnownHostsFile=/dev/null",
-    ]
-
-    for item in os.listdir(source_dir):
+def _sftp_put_dir(sftp, local_dir: str, remote_dir: str, logger=None):
+    """Recursively upload a local directory to remote via SFTP."""
+    for item in os.listdir(local_dir):
         if item.startswith('.'):
             continue
-        src_item = os.path.join(source_dir, item)
-        dest_uri = f"{user_host}:{remote_dir}/"
-
-        # Remove remote counterpart first to avoid nested directory bug
-        # (scp -r src_item user@host:/remote_dir/ copies into existing dir)
-        rm_cmd = [
-            "sshpass", "-p", password,
-            "ssh", "-o", "StrictHostKeyChecking=no",
-            "-o", "UserKnownHostsFile=/dev/null",
-            user_host, f"rm -rf {shlex.quote(os.path.join(remote_dir, item))}"
-        ]
-        if logger:
-            logger(f"Executing command: sshpass -p *** ssh ... rm -rf {shlex.quote(os.path.join(remote_dir, item))}")
-        _run_cmd(rm_cmd, logger)
-
-        cmd = cmd_base + [src_item, dest_uri]
-        if logger:
-            logger(f"Executing command: sshpass -p *** scp -r ... {src_item} {dest_uri}")
-        ret = _run_cmd(cmd, logger)
-        if ret != 0:
+        local_path = os.path.join(local_dir, item)
+        remote_path = remote_dir + '/' + item
+        if os.path.isdir(local_path):
+            try:
+                sftp.mkdir(remote_path)
+            except IOError:
+                pass
+            _sftp_put_dir(sftp, local_path, remote_path, logger)
+        else:
             if logger:
-                logger(f"Copy failed: {src_item}")
-            return False
+                logger(f"Uploading {local_path} -> {remote_path}")
+            sftp.put(local_path, remote_path)
+
+
+def _sftp_get_dir(sftp, remote_dir: str, local_dir: str, logger=None):
+    """Recursively download a remote directory to local via SFTP."""
+    try:
+        items = sftp.listdir_attr(remote_dir)
+    except IOError:
+        return
+    for item in items:
+        if item.filename.startswith('.'):
+            continue
+        remote_path = remote_dir + '/' + item.filename
+        local_path = os.path.join(local_dir, item.filename)
+        if stat.S_ISDIR(item.st_mode):
+            os.makedirs(local_path, exist_ok=True)
+            _sftp_get_dir(sftp, remote_path, local_path, logger)
+        else:
+            if logger:
+                logger(f"Downloading {remote_path} -> {local_path}")
+            sftp.get(remote_path, local_path)
+
+
+def _copy_dir_remote(source_dir: str, remote_path: str, password: str, logger=None) -> bool:
+    """Copy directory to remote via paramiko SFTP."""
+    user_host, remote_dir = parse_remote(remote_path)
+
+    client = _ssh_connect(user_host, password)
+    try:
+        _stdin, stdout, _stderr = client.exec_command(f"mkdir -p {shlex.quote(remote_dir)}")
+        stdout.channel.recv_exit_status()
+
+        sftp = client.open_sftp()
+        try:
+            for item in os.listdir(source_dir):
+                if item.startswith('.'):
+                    continue
+                src_item = os.path.join(source_dir, item)
+                remote_item = remote_dir + '/' + item
+
+                _stdin, stdout, _stderr = client.exec_command(
+                    f"rm -rf {shlex.quote(remote_item)}"
+                )
+                stdout.channel.recv_exit_status()
+
+                if os.path.isdir(src_item):
+                    try:
+                        sftp.mkdir(remote_item)
+                    except IOError:
+                        pass
+                    _sftp_put_dir(sftp, src_item, remote_item, logger)
+                else:
+                    if logger:
+                        logger(f"Uploading {src_item} -> {remote_item}")
+                    sftp.put(src_item, remote_item)
+        finally:
+            sftp.close()
+    finally:
+        client.close()
+
     if logger:
         logger("Remote copy completed")
     return True
 
 
 def _backup_from_remote(remote_path: str, backup_dir: str, password: str, logger=None) -> Optional[str]:
-    """Backup remote directory to local via scp using sshpass."""
+    """Backup remote directory to local via paramiko SFTP."""
     user_host, remote_dir = parse_remote(remote_path)
     basename = os.path.basename(os.path.normpath(remote_dir)) or "remote_backup"
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -388,18 +402,18 @@ def _backup_from_remote(remote_path: str, backup_dir: str, password: str, logger
     dest_path = os.path.join(backup_dir, dest_name)
 
     os.makedirs(backup_dir, exist_ok=True)
+    os.makedirs(dest_path, exist_ok=True)
 
-    cmd = [
-        "sshpass", "-p", password,
-        "scp", "-r", "-o", "StrictHostKeyChecking=no",
-        "-o", "UserKnownHostsFile=/dev/null",
-        f"{user_host}:{remote_dir}", dest_path,
-    ]
-    if logger:
-        logger(f"Executing command: sshpass -p *** scp -r ... {user_host}:{remote_dir} {dest_path}")
-    ret = _run_cmd(cmd, logger)
-    if ret != 0:
-        raise RuntimeError(f"Remote backup failed: {user_host}:{remote_dir} -> {dest_path}")
+    client = _ssh_connect(user_host, password)
+    try:
+        sftp = client.open_sftp()
+        try:
+            _sftp_get_dir(sftp, remote_dir, dest_path, logger)
+        finally:
+            sftp.close()
+    finally:
+        client.close()
+
     if logger:
         logger(f"Remote backup completed: {user_host}:{remote_dir} -> {dest_path}")
     if _remove_if_empty(dest_path, logger):

@@ -55,6 +55,91 @@ def _collect_commands(mock_run_cmd):
     return [c[0][0] for c in mock_run_cmd.call_args_list]
 
 
+class _FakeSFTPItem:
+    def __init__(self, filename: str, is_dir: bool = False):
+        self.filename = filename
+        self.st_mode = __import__("stat").S_IFDIR if is_dir else __import__("stat").S_IFREG
+
+
+def _mock_paramiko(monkeypatch, exec_results=None):
+    """Mock paramiko.SSHClient for remote operation tests.
+
+    exec_results: list of (exit_status, stdout_lines, stderr_text).
+    Returns (fake_client, fake_sftp).
+    """
+    exec_results = list(exec_results) if exec_results is not None else [(0, [], "")]
+    result_iter = iter(exec_results)
+
+    class FakeChannel:
+        def __init__(self, status):
+            self._status = status
+        def recv_exit_status(self):
+            return self._status
+
+    class FakeStdout:
+        def __init__(self, lines, status):
+            self.channel = FakeChannel(status)
+            self._data = "\n".join(lines).encode("utf-8") if lines else b""
+        def read(self):
+            return self._data
+
+    class FakeStderr:
+        def __init__(self, text):
+            self._data = text.encode("utf-8")
+        def read(self):
+            return self._data
+
+    class FakeSFTP:
+        def __init__(self):
+            self.put_calls = []
+            self.get_calls = []
+            self.mkdir_calls = []
+            self.listdir_attr_calls = []
+            self._remote_tree = {}
+        def put(self, local, remote):
+            self.put_calls.append((str(local), str(remote)))
+        def get(self, remote, local):
+            self.get_calls.append((str(remote), str(local)))
+            # Touch local file so backup appears non-empty
+            os.makedirs(os.path.dirname(local), exist_ok=True)
+            with open(local, "w", encoding="utf-8") as f:
+                f.write("mock")
+        def mkdir(self, path):
+            self.mkdir_calls.append(path)
+        def listdir_attr(self, path):
+            self.listdir_attr_calls.append(path)
+            return self._remote_tree.get(path, [])
+        def close(self):
+            pass
+
+    fake_sftp = FakeSFTP()
+
+    class FakeClient:
+        def __init__(self):
+            self.exec_calls = []
+            self.closed = False
+        def set_missing_host_key_policy(self, policy):
+            pass
+        def connect(self, **kwargs):
+            pass
+        def exec_command(self, cmd):
+            self.exec_calls.append(cmd)
+            try:
+                status, lines, err = next(result_iter)
+            except StopIteration:
+                status, lines, err = 0, [], ""
+            return None, FakeStdout(lines, status), FakeStderr(err)
+        def open_sftp(self):
+            return fake_sftp
+        def close(self):
+            self.closed = True
+
+    fake_client = FakeClient()
+    import paramiko
+    monkeypatch.setattr(paramiko, "SSHClient", lambda: fake_client)
+    return fake_client, fake_sftp
+
+
 # =============================================================================
 # Local Target Tests
 # =============================================================================
@@ -322,9 +407,8 @@ class TestLocalCompatibilityAndOverlap:
 class TestRemotePatch:
     """Validate patch behavior for remote target directories."""
 
-    @mock_patch("lib.backup_lib._run_cmd")
-    def test_patch_remote_executes_scp_commands(self, mock_run_cmd, tmp_path):
-        mock_run_cmd.return_value = 0
+    def test_patch_remote_executes_ssh_and_sftp(self, monkeypatch, tmp_path):
+        fake_client, fake_sftp = _mock_paramiko(monkeypatch)
         output_dir = tmp_path / "output"
         output_dir.mkdir()
         _write_file(output_dir / "a.txt", "a")
@@ -333,27 +417,13 @@ class TestRemotePatch:
         remote_target = "user@192.168.1.100:/remote/target"
         patch(str(output_dir), remote_target, password="secret")
 
-        commands = _collect_commands(mock_run_cmd)
+        exec_cmds = fake_client.exec_calls
+        assert any("mkdir -p" in c for c in exec_cmds)
+        assert sum("rm -rf" in c for c in exec_cmds) == 2
+        assert len(fake_sftp.put_calls) == 2  # a.txt and sub dir tree
 
-        # Should have mkdir + rm for each item + scp for each item
-        assert len(commands) >= 1
-
-        # First command: mkdir -p
-        first = commands[0]
-        assert first[0] == "sshpass"
-        assert "mkdir" in " ".join(first)
-
-        # Count scp commands
-        scp_cmds = [c for c in commands if len(c) > 3 and c[3] == "scp"]
-        assert len(scp_cmds) == 2  # a.txt and sub dir
-
-        # Count ssh rm commands
-        rm_cmds = [c for c in commands if len(c) > 3 and c[3] == "ssh" and "rm -rf" in " ".join(c)]
-        assert len(rm_cmds) == 2  # a.txt and sub dir
-
-    @mock_patch("lib.backup_lib._run_cmd")
-    def test_patch_remote_target_validated_by_mkdir(self, mock_run_cmd, tmp_path):
-        mock_run_cmd.return_value = 0
+    def test_patch_remote_target_validated_by_mkdir(self, monkeypatch, tmp_path):
+        fake_client, _ = _mock_paramiko(monkeypatch)
         output_dir = tmp_path / "output"
         output_dir.mkdir()
         _write_file(output_dir / "file.txt", "f")
@@ -361,18 +431,15 @@ class TestRemotePatch:
         remote_target = "user@192.168.1.100:/remote/target"
         patch(str(output_dir), remote_target, password="secret")
 
-        commands = _collect_commands(mock_run_cmd)
-        first = commands[0]
-        assert "mkdir -p" in " ".join(first)
-        assert "user@192.168.1.100" in first
+        assert any("mkdir -p" in c for c in fake_client.exec_calls)
+        assert any("/remote/target" in c for c in fake_client.exec_calls)
 
 
 class TestRemoteRollback:
     """Validate rollback behavior for remote target directories."""
 
-    @mock_patch("lib.backup_lib._run_cmd")
-    def test_rollback_remote_executes_scp_commands(self, mock_run_cmd, tmp_path):
-        mock_run_cmd.return_value = 0
+    def test_rollback_remote_executes_ssh_and_sftp(self, monkeypatch, tmp_path):
+        fake_client, fake_sftp = _mock_paramiko(monkeypatch)
         backup_dir = tmp_path / "backup"
         backup_dir.mkdir()
         _write_file(backup_dir / "a.txt", "a")
@@ -381,33 +448,24 @@ class TestRemoteRollback:
         remote_target = "user@192.168.1.100:/remote/target"
         rollback(str(backup_dir), remote_target, password="secret")
 
-        commands = _collect_commands(mock_run_cmd)
-
-        scp_cmds = [c for c in commands if len(c) > 3 and c[3] == "scp"]
-        assert len(scp_cmds) == 2  # a.txt and sub dir
-
-        rm_cmds = [c for c in commands if len(c) > 3 and c[3] == "ssh" and "rm -rf" in " ".join(c)]
-        assert len(rm_cmds) == 2
+        assert sum("rm -rf" in c for c in fake_client.exec_calls) == 2
+        assert len(fake_sftp.put_calls) == 2  # a.txt and sub dir tree
 
 
 class TestRemoteBackup:
     """Validate backup behavior for remote target directories."""
 
-    @mock_patch("lib.backup_lib._run_cmd")
-    def test_backup_remote_executes_scp_from_remote(self, mock_run_cmd, tmp_path):
-        mock_run_cmd.return_value = 0
+    def test_backup_remote_executes_sftp_from_remote(self, monkeypatch, tmp_path):
+        fake_client, fake_sftp = _mock_paramiko(monkeypatch)
+        fake_sftp._remote_tree = {"/remote/target": [_FakeSFTPItem("file.txt")]}
         backup_base = tmp_path / "backups"
         backup_base.mkdir()
 
         remote_target = "user@192.168.1.100:/remote/target"
         result = backup(remote_target, str(backup_base), password="secret")
 
-        commands = _collect_commands(mock_run_cmd)
-        assert len(commands) == 1
-        cmd = commands[0]
-        assert cmd[0] == "sshpass"
-        assert cmd[3] == "scp"
-        assert "user@192.168.1.100:/remote/target" in cmd
+        assert "/remote/target" in fake_sftp.listdir_attr_calls
+        assert len(fake_sftp.get_calls) == 1
         assert result is not None
         assert os.path.basename(os.path.dirname(result)) == "backups"
 
@@ -473,27 +531,25 @@ class TestRemoteCompatibilityAndOverlap:
 
         shutil.rmtree(output_dir)
 
-    @mock_patch("lib.backup_lib._run_ssh_cmd")
-    @mock_patch("lib.backup_lib._run_cmd")
-    def test_backup_overlapping_files_remote_triggers_full_backup(self, mock_run_cmd, mock_ssh):
-        mock_ssh.return_value = (0, ["a.txt"])
-        mock_run_cmd.return_value = 0
+    def test_backup_overlapping_files_remote_triggers_full_backup(self, monkeypatch, tmp_path):
+        fake_client, fake_sftp = _mock_paramiko(
+            monkeypatch, exec_results=[(0, [""], "")]  # test -d returns 0
+        )
+        fake_sftp._remote_tree = {"/remote/target": [_FakeSFTPItem("a.txt")]}
 
-        output_dir = tempfile.mkdtemp()
-        backup_dir = tempfile.mkdtemp()
-        _write_file(os.path.join(output_dir, "a.txt"), "a")
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+        backup_dir = tmp_path / "backup"
+        backup_dir.mkdir()
+        _write_file(output_dir / "a.txt", "a")
 
         remote_target = "user@192.168.1.100:/remote/target"
-        result = backup_overlapping_files(output_dir, remote_target, backup_dir, password="secret")
+        result = backup_overlapping_files(str(output_dir), remote_target, str(backup_dir), password="secret")
 
-        # Remote target should trigger a full backup via scp
+        # Remote target should trigger a full backup via SFTP
         assert result is not None
-        commands = _collect_commands(mock_run_cmd)
-        assert len(commands) == 1
-        assert commands[0][3] == "scp"
-
-        shutil.rmtree(output_dir)
-        shutil.rmtree(backup_dir)
+        assert any("test -d" in c for c in fake_client.exec_calls)
+        assert len(fake_sftp.get_calls) == 1
 
 
 # =============================================================================

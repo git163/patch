@@ -4,7 +4,6 @@
 import json
 import os
 import shlex
-import subprocess
 import sys
 
 # Add project root to sys.path so lib can be imported
@@ -47,7 +46,7 @@ DEFAULT_CONFIG_PATH = os.path.join(
 
 
 class _ListRemoteThread(QThread):
-    """Background thread to list remote directory via ssh."""
+    """Background thread to list remote directory via paramiko."""
     finished = Signal(bool, str, list)
 
     def __init__(self, password: str, user_host: str, remote_dir: str, parent=None):
@@ -57,29 +56,35 @@ class _ListRemoteThread(QThread):
         self.remote_dir = remote_dir
 
     def run(self):
-        cmd = [
-            "sshpass", "-p", self.password,
-            "ssh", "-o", "StrictHostKeyChecking=no",
-            "-o", "UserKnownHostsFile=/dev/null",
-            self.user_host, f"ls -F1 {shlex.quote(self.remote_dir)}"
-        ]
         try:
-            proc = subprocess.run(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                errors="replace",
+            import paramiko
+            client = paramiko.SSHClient()
+            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            username, hostname = self.user_host.split("@", 1)
+            client.connect(
+                hostname=hostname,
+                username=username,
+                password=self.password,
+                look_for_keys=False,
+                allow_agent=False,
             )
-            if proc.returncode != 0:
-                self.finished.emit(False, proc.stderr.strip(), [])
-                return
-            lines = []
-            for line in proc.stdout.splitlines():
-                line = line.strip()
-                if line and line not in (".", ".."):
-                    lines.append(line)
-            self.finished.emit(True, "", lines)
+            try:
+                _stdin, stdout, stderr = client.exec_command(
+                    f"ls -F1 {shlex.quote(self.remote_dir)}"
+                )
+                exit_status = stdout.channel.recv_exit_status()
+                if exit_status != 0:
+                    err = stderr.read().decode("utf-8", errors="replace").strip()
+                    self.finished.emit(False, err, [])
+                    return
+                lines = []
+                for line in stdout.read().decode("utf-8", errors="replace").splitlines():
+                    line = line.strip()
+                    if line and line not in (".", ".."):
+                        lines.append(line)
+                self.finished.emit(True, "", lines)
+            finally:
+                client.close()
         except Exception as e:
             self.finished.emit(False, str(e), [])
 
@@ -134,7 +139,7 @@ class _WorkerThread(QThread):
 
 
 class RemoteDirDialog(QDialog):
-    """Simple remote directory browser via sshpass + ssh."""
+    """Simple remote directory browser via paramiko."""
 
     def __init__(self, parent, initial_path: str, password: str):
         super().__init__(parent)
